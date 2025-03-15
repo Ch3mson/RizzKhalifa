@@ -1,0 +1,6 @@
+framework module flutter_foreground_task {
+  umbrella header "flutter_foreground_task-umbrella.h"
+
+  export *
+  module * { export * }
+}

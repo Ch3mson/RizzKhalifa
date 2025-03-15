@@ -1,0 +1,39 @@
+{
+  "name": "just_audio",
+  "version": "0.0.1",
+  "summary": "Flutter audio player",
+  "description": "A flutter plugin for playing audio.",
+  "homepage": "https://github.com/ryanheise/just_audio",
+  "license": {
+    "file": "../LICENSE"
+  },
+  "authors": {
+    "Your Company": "email@example.com"
+  },
+  "source": {
+    "path": "."
+  },
+  "source_files": "just_audio/Sources/just_audio/**/*.{h,m}",
+  "public_header_files": "just_audio/Sources/just_audio/include/**/*.h",
+  "ios": {
+    "dependencies": {
+      "Flutter": [
+
+      ]
+    }
+  },
+  "osx": {
+    "dependencies": {
+      "FlutterMacOS": [
+
+      ]
+    }
+  },
+  "platforms": {
+    "ios": "12.0",
+    "osx": "10.14"
+  },
+  "pod_target_xcconfig": {
+    "DEFINES_MODULE": "YES"
+  }
+}
