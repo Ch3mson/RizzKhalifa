@@ -72,6 +72,7 @@ class SpeechToText:
                 
                 data = {
                     "model": self.model,
+                    "language": "en",  # Force English language transcription
                 }
                 
                 if detect_trigger_only:

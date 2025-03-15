@@ -7,3 +7,4 @@ from modules.agents.topic_extraction_agent import TopicExtractionAgent
 from modules.agents.personal_info_agent import PersonalInfoAgent
 from modules.agents.response_generation_agent import ResponseGenerationAgent
 from modules.agents.speaker_diarization_agent import SpeakerDiarizationAgent 
+from modules.agents.rizz_cursor_agent import RizzCursorAgent
