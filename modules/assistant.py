@@ -9,19 +9,19 @@ import cv2
 import numpy as np
 
 from datetime import datetime
-from modules.config import TRIGGER_PHRASE, STOP_PHRASE, get_output_file
+from modules.config import get_output_file, GROQ_WHISPER_MODEL
 from modules.audio import AudioRecorder
 from modules.speech_to_text import SpeechToText
 from modules.output import TextOutput
 from modules.workflow import ConversationWorkflow
 from modules.facial_recognition import FacialRecognitionModule
+from modules.agents import RizzCursorAgent
 
 class ConversationAssistant:
     """
     Orchestrates the entire pipeline using continuous audio recording:
       - Background thread for audio recording
       - Processing thread for STT and agent execution
-      - Active Listening mode toggling
       - Speaker diarization for multi-speaker conversations
       - Facial recognition for identifying speakers (when camera is enabled)
     """
@@ -35,14 +35,14 @@ class ConversationAssistant:
             use_camera: Whether to capture screen for face detection
         """
         # Initialize basic components
-        self.transcriber = SpeechToText(use_diarization=use_diarization)
+        self.transcriber = SpeechToText(model_name=GROQ_WHISPER_MODEL, use_diarization=use_diarization)
         self.workflow = ConversationWorkflow()
         self.text_output = TextOutput()
         
         # Initialize audio recording
         self.recorder = AudioRecorder()
         
-        # Setup for speaker diarization
+        # Setup for speaker diarizationw
         self.use_diarization = use_diarization
         self.expected_speakers = expected_speakers
         self.user_reference_captured = False
@@ -54,6 +54,9 @@ class ConversationAssistant:
         self.video_thread = None
         self.video_recording = False
         self.current_video_buffer = []
+        
+        # Initialize the rizz cursor agent (keeping the reference but not using it)
+        self.rizz_agent = RizzCursorAgent()
         
         # Use current project directory for saving conversations
         self.conversations_dir = os.path.join(os.getcwd(), "conversations")
@@ -80,16 +83,15 @@ class ConversationAssistant:
         
         # State
         self.is_running = False
-        self.active_listening = False
+        self.active_listening = False  # Keeping this for compatibility but not using active listening mode
 
     def process_audio_segment(self, active_mode=False):
         """
         Grabs an audio snippet, transcribes it, updates the workflow.
-        If the trigger phrase or stop phrase is found, toggles active listening.
         Returns (transcription, pause_detected).
         """
         try:
-            # Get audio segment without interrupting recording
+            # Get a regular audio segment
             audio_file, pause_detected = self.recorder.get_audio_segment(
                 wait_for_pause=active_mode
             )
@@ -200,14 +202,6 @@ class ConversationAssistant:
             if transcription.strip():
                 print(f"Transcribed: {transcription}")
                 
-                # Check for trigger or stop phrases inline
-                if TRIGGER_PHRASE.lower() in transcription.lower():
-                    self.active_listening = True
-                    self.text_output.output("Active listening enabled.", "SYSTEM")
-                elif STOP_PHRASE.lower() in transcription.lower():
-                    self.active_listening = False
-                    self.text_output.output("Active listening disabled.", "SYSTEM")
-                
                 return transcription, pause_detected
             
             return None, False
@@ -216,6 +210,24 @@ class ConversationAssistant:
             import traceback
             traceback.print_exc()
             return None, False
+    
+    def _check_for_trigger_phrase(self, audio_file):
+        """
+        Method kept for compatibility but no longer used.
+        """
+        return False
+            
+    def _activate_listening_mode(self):
+        """
+        Method kept for compatibility but no longer used.
+        """
+        pass
+                
+    def _deactivate_listening_mode(self):
+        """
+        Method kept for compatibility but no longer used.
+        """
+        pass
     
     def capture_user_reference(self):
         """
@@ -333,10 +345,8 @@ class ConversationAssistant:
             
             # Get screen size
             screen_width, screen_height = pyautogui.size()
-            target_width, target_height = 640, 480
-            
             print(f"Screen capture initialized with resolution {screen_width}x{screen_height}")
-            print(f"Downsampling to {target_width}x{target_height} for processing")
+            print(f"Using maximum resolution for better face detection")
             print("Waiting for audio to start capturing the screen...")
             
             # Set up variables for face tracking
@@ -344,6 +354,10 @@ class ConversationAssistant:
             face_detected = False
             current_face_name = None
             last_face_check_time = time.time()
+            
+            # For improved consistency, track multiple face detections
+            face_consistency_buffer = []
+            required_consistent_detections = 3  # Require multiple consistent detections
             
             # Record frames
             consecutive_errors = 0
@@ -364,7 +378,7 @@ class ConversationAssistant:
                         if not face_detected:
                             print("Looking for a face to track...")
                             # Capture screen with robust error handling
-                            frame = self._capture_screen_frame(target_width, target_height)
+                            frame = self._capture_screen_frame()
                             if frame is None:
                                 raise Exception("Failed to capture valid screen frame")
                                 
@@ -377,35 +391,60 @@ class ConversationAssistant:
                                         face_name = face_info["name"]
                                         face_embedding = face_info["embedding"]
                                         
-                                        # Store the current face information
-                                        current_face_name = face_name
-                                        self.facial_recognition.update_current_face(face_name, face_embedding)
-                                        face_detected = True
+                                        # Add to consistency buffer
+                                        face_consistency_buffer.append(face_name)
                                         
-                                        print(f"✓ Face detected! Identified as: {face_name}")
-                                        print(f"The same person will be used for the entire conversation")
-                                        print(f"Face will be rechecked every {self.facial_recognition.get_recheck_interval()} seconds")
-                                        
-                                        # For all future audio segments, associate with this person
-                                        for segment in self.workflow.speaker_segments:
-                                            segment["person"] = current_face_name
-                                        
-                                        # Update the workflow state
-                                        if hasattr(self.workflow, 'state'):
-                                            if "speaker_segments" in self.workflow.state:
-                                                for segment in self.workflow.state["speaker_segments"]:
+                                        # Only proceed if we have enough consistent detections
+                                        if len(face_consistency_buffer) >= required_consistent_detections:
+                                            # Check if the majority of detections are the same person
+                                            from collections import Counter
+                                            face_counts = Counter(face_consistency_buffer)
+                                            most_common_face, count = face_counts.most_common(1)[0]
+                                            
+                                            if count >= required_consistent_detections * 0.7:  # At least 70% agreement
+                                                # Store the current face information
+                                                current_face_name = most_common_face
+                                                self.facial_recognition.update_current_face(most_common_face, face_embedding)
+                                                face_detected = True
+                                                
+                                                print(f"✓ Face consistently detected! Identified as: {current_face_name}")
+                                                print(f"The same person will be used for the entire conversation")
+                                                print(f"Face will be rechecked every {self.facial_recognition.get_recheck_interval()} seconds")
+                                                
+                                                # For all future audio segments, associate with this person
+                                                for segment in self.workflow.speaker_segments:
                                                     segment["person"] = current_face_name
+                                                
+                                                # Update the workflow state
+                                                if hasattr(self.workflow, 'state'):
+                                                    if "speaker_segments" in self.workflow.state:
+                                                        for segment in self.workflow.state["speaker_segments"]:
+                                                            segment["person"] = current_face_name
+                                            else:
+                                                print(f"Face detections not consistent enough. Continuing to collect samples...")
+                                        else:
+                                            print(f"Detected face: {face_name} ({len(face_consistency_buffer)}/{required_consistent_detections} samples)")
                                 except Exception as e:
                                     print(f"Error in face detection: {e}")
                         
                         # STEP 3: If we already have a face, only check periodically if it's still the same person
                         elif self.facial_recognition and self.facial_recognition.should_recheck_face():
                             print(f"Rechecking if current face is still {current_face_name}...")
-                            # Capture a new frame
-                            frame = self._capture_screen_frame(target_width, target_height)
-                            if frame is None:
-                                print("Skipping face recheck - could not capture valid frame")
-                            else:
+                            
+                            # For stricter verification, collect multiple samples
+                            verification_samples = []
+                            verification_attempts = 0
+                            max_verification_attempts = 3
+                            
+                            while verification_attempts < max_verification_attempts:
+                                # Capture a new frame
+                                frame = self._capture_screen_frame()
+                                if frame is None:
+                                    print(f"Skipping verification attempt {verification_attempts+1} - could not capture valid frame")
+                                    verification_attempts += 1
+                                    time.sleep(0.5)
+                                    continue
+                                    
                                 # Process the frame to see if we still have the same face
                                 try:
                                     face_results = self.facial_recognition.process_video_frame(frame)
@@ -416,23 +455,27 @@ class ConversationAssistant:
                                         
                                         # Check if it's the same face
                                         is_same = self.facial_recognition.is_same_face(face_embedding)
-                                        
-                                        if is_same:
-                                            print(f"✓ Verified: Still the same person ({current_face_name})")
-                                            # Update the last check time
-                                            self.facial_recognition.last_face_check_time = time.time()
-                                        else:
-                                            # We have a different person now
-                                            print(f"⚠ Different person detected! Updating from {current_face_name} to {face_name}")
-                                            current_face_name = face_name
-                                            self.facial_recognition.update_current_face(face_name, face_embedding)
-                                            
-                                            # For all future segments, use the new person
-                                            # (we don't change past segments to maintain conversation history)
+                                        verification_samples.append(is_same)
                                     else:
-                                        print("No face found during recheck - keeping current face identification")
+                                        verification_samples.append(False)
                                 except Exception as e:
-                                    print(f"Error during face recheck: {e}")
+                                    print(f"Error during verification attempt {verification_attempts+1}: {e}")
+                                    
+                                verification_attempts += 1
+                                time.sleep(0.5)  # Brief pause between verification attempts
+                            
+                            # Determine if it's still the same person (majority vote)
+                            same_face_count = sum(verification_samples)
+                            if same_face_count >= len(verification_samples) / 2:
+                                print(f"✓ Verified: Still the same person ({current_face_name}) - {same_face_count}/{len(verification_samples)} matches")
+                                # Update the last check time
+                                self.facial_recognition.last_face_check_time = time.time()
+                            else:
+                                print(f"⚠ Face verification failed: Only {same_face_count}/{len(verification_samples)} matches")
+                                # Reset face detection to find the correct person again
+                                face_detected = False
+                                face_consistency_buffer = []
+                                print("Resetting face detection to find the correct person")
                     
                     # Sleep to reduce CPU usage - shorter if we're actively looking for a face
                     sleep_time = 0.1 if (audio_detected and not face_detected) else 0.5
@@ -455,12 +498,16 @@ class ConversationAssistant:
             
         print("Video thread stopped")
     
-    def _capture_screen_frame(self, target_width=640, target_height=480):
-        """Helper method to capture a screen frame with robust error handling"""
+    def _capture_screen_frame(self, target_width=None, target_height=None):
+        """
+        Helper method to capture a screen frame with robust error handling.
+        Uses maximum screen resolution when target dimensions are None.
+        """
         try:
             # Try primary method using pyautogui
             try:
                 import pyautogui
+                screen_width, screen_height = pyautogui.size()
                 screenshot = pyautogui.screenshot()
             except Exception as e:
                 print(f"PyAutoGUI screenshot error: {e}. Trying alternative method...")
@@ -468,6 +515,8 @@ class ConversationAssistant:
                 try:
                     import PIL.ImageGrab
                     screenshot = PIL.ImageGrab.grab()
+                    # Get screen size from PIL if pyautogui failed
+                    screen_width, screen_height = screenshot.size
                 except Exception as e2:
                     print(f"PIL ImageGrab error: {e2}")
                     return None
@@ -486,8 +535,12 @@ class ConversationAssistant:
             # Convert RGB to BGR (OpenCV format)
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
-            # Resize frame to reduce memory usage
-            frame = cv2.resize(frame, (target_width, target_height))
+            # Only resize if target dimensions are specified
+            # Otherwise use the full screen resolution
+            if target_width is not None and target_height is not None:
+                frame = cv2.resize(frame, (target_width, target_height))
+            else:
+                print(f"Using maximum screen resolution: {screen_width}x{screen_height}")
             
             # Store frame in buffer (keep just enough frames for face detection)
             timestamp = time.time()
@@ -571,7 +624,6 @@ class ConversationAssistant:
         self.processing_active = True
         
         consecutive_errors = 0
-        max_consecutive_errors = 3
         
         print("Processing thread started")
         
@@ -598,11 +650,39 @@ class ConversationAssistant:
                     explanation = process_result.get("explanation", "")
                     print(f"Processing as: {category} - {explanation}")
                     
-                    # If it's SKIP category, don't process through the full workflow
+                    # If it's SKIP category, we still add it to the workflow but mark it as part of a runnable sequence
+                    # This ensures it's part of the graph but restarts the sequence
                     if category == "SKIP":
-                        print("Skipping full workflow processing for meaningless input")
-                        continue
+                        print(f"Skipping workflow processing for segment: {transcription[:50]}...")
                         
+                        # Even though we're skipping workflow processing, still add it to state for context
+                        if self.workflow and hasattr(self.workflow, 'state'):
+                            # Directly update workflow state with the segment
+                            try:
+                                # Ensure the workflow graph is available
+                                if hasattr(self.workflow, 'graph') and self.workflow.graph:
+                                    # Prepare state with skip category
+                                    self.workflow.state["category"] = "SKIP"
+                                    self.workflow.state["last_processed"] = transcription
+                                    
+                                    # Try to run it through the graph to properly process the SKIP category
+                                    try:
+                                        # This should trigger the skip handling in the check_category node
+                                        result = self.workflow.graph.invoke(self.workflow.state)
+                                        if result:
+                                            self.workflow.state = result
+                                    except Exception as e:
+                                        print(f"Warning: Graph error handling SKIP category: {e}")
+                                        # If graph fails, just add to conversation
+                                        if "conversation" in self.workflow.state:
+                                            if self.workflow.state["conversation"]:
+                                                self.workflow.state["conversation"] += "\n" + transcription
+                                            else:
+                                                self.workflow.state["conversation"] = transcription
+                            except Exception as e:
+                                print(f"Error updating workflow state with skipped segment: {e}")
+                        
+                        continue  # Skip further processing for this segment
                 except Exception as e:
                     print(f"Error pre-checking input with processor: {e}")
                     # Continue with normal processing as fallback
@@ -610,7 +690,8 @@ class ConversationAssistant:
                 # Process through the workflow
                 if self.workflow:
                     try:
-                        # Try running the workflow to process the input
+                        # Set normal category for non-SKIP items
+                        self.workflow.state["category"] = category
                         self.workflow.update_conversation(transcription)
                         print("✓ Successfully processed through workflow")
                         consecutive_errors = 0  # Reset error counter
@@ -633,21 +714,10 @@ class ConversationAssistant:
                 
         print("Processing thread ended")
                 
-    def active_listen(self):
-        """
-        In active listening, we continuously record and process audio.
-        When a pause is detected, a response is generated.
-        """
-        print(f"[Active Listening Mode] Say '{STOP_PHRASE}' to exit active mode.")
-        while self.active_listening and self.is_running:
-            self.process_audio_segment(active_mode=True)
-            time.sleep(0.1)
-
     def run(self):
         """
         The main loop. Continuously records audio in the background thread
-        and processes it. If user says TRIGGER_PHRASE, we switch to 
-        active listening until STOP_PHRASE.
+        and processes it.
         """
         # Ensure all directories are properly set up
         self._setup_directories()
@@ -678,9 +748,6 @@ class ConversationAssistant:
             self.video_thread.daemon = True
             self.video_thread.start()
         
-        print(f"Say '{TRIGGER_PHRASE}' to enable Active Listening mode")
-        print(f"Say '{STOP_PHRASE}' to exit Active Listening mode\n")
-
         # Start the background recording thread
         self.recorder.start_recording()
         
@@ -694,18 +761,14 @@ class ConversationAssistant:
         # Main loop
         try:
             while self.is_running:
-                # Process audio segment
-                transcription, pause_detected = self.process_audio_segment(
-                    active_mode=self.active_listening
-                )
+                # Process audio segment - always use active_mode=False to avoid pause detection behavior
+                transcription, pause_detected = self.process_audio_segment(active_mode=False)
                 
                 # If we have transcription, queue it for processing
                 if transcription and transcription.strip():
                     self.processing_queue.put((transcription, pause_detected))
                     
-                # Adjust sleep time based on active listening mode
-                sleep_time = 0.1 if self.active_listening else 0.5
-                time.sleep(sleep_time)
+                time.sleep(0.5)
                 
         except KeyboardInterrupt:
             print("\nStopping...")
@@ -827,12 +890,12 @@ class ConversationAssistant:
     def _save_final_conversation_data(self):
         """
         Save the final conversation data for all recognized persons.
-        Uses a simplified structure with just one directory per person and three text files:
-        1. conversation.txt - Chat history
-        2. knowledge_base.txt - Knowledge base for interests
-        3. topics.txt - Topics of interest
-        
-        Ensures consistent directory naming to avoid duplicate directories.
+        Uses a simplified structure with just one directory per person and consistent files:
+        1. conversation_history.txt - Complete conversation history
+        2. conversation_1.txt, conversation_2.txt, etc. - Individual conversations
+        3. knowledge_base.txt - Knowledge base for interests
+        4. topics.txt - Topics of interest
+        5. face_embedding.pkl - Face embedding data when available
         """
         print("\nSaving final conversation data...")
         
@@ -856,48 +919,40 @@ class ConversationAssistant:
                 if 'person' in segment and segment['person']:
                     unique_persons.add(segment['person'])
             
-            # If no persons identified, use "Unknown" as fallback with a unique timestamp
+            # If no persons identified, use timestamp-based Person ID as fallback
             if not unique_persons:
                 # Check if we've already created a default person ID
                 if hasattr(self, '_default_person_id'):
                     unique_persons = {self._default_person_id}
                 else:
+                    # Create a timestamp-based person ID
                     current_time = int(time.time())
                     self._default_person_id = f"Person_{current_time}"
                     unique_persons = {self._default_person_id}
-                
+            
             print(f"Saving conversation data for {len(unique_persons)} recognized persons: {', '.join(unique_persons)}")
                 
             # Create conversations directory if it doesn't exist
             os.makedirs(self.conversations_dir, exist_ok=True)
                 
-            # Dictionary to keep track of clean person names
+            # Dictionary to keep track of person name mapping
             person_id_map = {}
                 
             # Save data for each unique person
             for person in unique_persons:
-                # Ensure a consistent person name
-                if person.startswith("Person_") or person.startswith("Unknown"):
-                    # Extract just the base identifier without multiple timestamps
-                    parts = person.split("_")
-                    if len(parts) > 1:
-                        # Keep just the first segment (Person or Unknown) and the next segment
-                        base_name = f"{parts[0]}_{parts[1]}"
-                        person_id_map[person] = base_name
-                        person = base_name
-                    elif "_" not in person[7:]:  # No timestamp yet
-                        # Keep consistent with workflow by using the same ID
-                        if hasattr(self.workflow, '_default_person_id'):
-                            person = self.workflow._default_person_id
-                        else:
-                            # If all else fails, use the existing name
-                            pass
+                # Keep timestamp-based names as they are
+                if not person.startswith("Person_") and not person.startswith("Unknown_"):
+                    # Create a timestamp-based name for any non-standard format
+                    current_time = int(time.time())
+                    new_person = f"Person_{current_time}"
+                    person_id_map[person] = new_person
+                    person = new_person
                 
                 person_dir = os.path.join(self.conversations_dir, person)
                 os.makedirs(person_dir, exist_ok=True)
                 
                 # 1. Save conversation history
-                conversation_path = os.path.join(person_dir, "conversation.txt")
+                conversation_path = os.path.join(person_dir, "conversation_history.txt")
                 
                 # Check if file exists to append or create new
                 file_mode = 'a' if os.path.exists(conversation_path) else 'w'
@@ -907,7 +962,7 @@ class ConversationAssistant:
                     if file_mode == 'a':
                         f.write(f"\n\n--- CONTINUED CONVERSATION {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
                     else:
-                        f.write(f"CONVERSATION WITH {person.upper()}\n")
+                        f.write(f"CONVERSATION HISTORY FOR {person.upper()}\n")
                         f.write("="*80 + "\n\n")
                     
                     # First add the structured speaker segments if available
@@ -915,7 +970,34 @@ class ConversationAssistant:
                         for segment in speaker_segments:
                             speaker = segment.get('speaker', 'Unknown')
                             person_name = segment.get('person', speaker)
-                            # Use cleaned name if available
+                            # Use mapped name if available
+                            if person_name in person_id_map:
+                                person_name = person_id_map[person_name]
+                            text = segment.get('text', '')
+                            f.write(f"[{person_name}]: {text}\n")
+                    else:
+                        # Otherwise add the raw conversation text
+                        f.write(conversation)
+                
+                # Also save as individual conversation
+                conversation_files = [f for f in os.listdir(person_dir) 
+                                   if f.startswith("conversation_") and f.endswith(".txt") and not f == "conversation_history.txt"]
+                next_number = 1
+                if conversation_files:
+                    numbers = [int(f.split("_")[1].split(".")[0]) for f in conversation_files]
+                    next_number = max(numbers) + 1
+                
+                individual_conv_path = os.path.join(person_dir, f"conversation_{next_number}.txt")
+                with open(individual_conv_path, 'w') as f:
+                    f.write(f"CONVERSATION {next_number} WITH {person.upper()}\n")
+                    f.write("="*80 + "\n\n")
+                    
+                    # Add the structured speaker segments if available
+                    if speaker_segments:
+                        for segment in speaker_segments:
+                            speaker = segment.get('speaker', 'Unknown')
+                            person_name = segment.get('person', speaker)
+                            # Use mapped name if available
                             if person_name in person_id_map:
                                 person_name = person_id_map[person_name]
                             text = segment.get('text', '')
@@ -972,4 +1054,142 @@ class ConversationAssistant:
         except Exception as e:
             print(f"Error saving final conversation data: {e}")
             import traceback
-            traceback.print_exc() 
+            traceback.print_exc()
+    
+    def migrate_to_person_format(self):
+        """
+        Migrate existing conversation directories to the person### format.
+        Converts Person_timestamp and other formats to person001, person002, etc.
+        """
+        print("\nMigrating existing conversation directories to person### format...")
+        
+        try:
+            # Ensure conversations directory exists
+            if not os.path.exists(self.conversations_dir):
+                print("No conversations directory found. Nothing to migrate.")
+                return
+            
+            # Get all directories that need migration (not already in person### format)
+            dirs_to_migrate = []
+            for item in os.listdir(self.conversations_dir):
+                item_path = os.path.join(self.conversations_dir, item)
+                if os.path.isdir(item_path) and not item.startswith("person") and item not in ["system_logs", "system_data", "temp_files"]:
+                    dirs_to_migrate.append(item)
+            
+            if not dirs_to_migrate:
+                print("No directories need migration.")
+                return
+            
+            print(f"Found {len(dirs_to_migrate)} directories to migrate")
+            
+            # Create mapping for old to new directory names
+            migration_map = {}
+            next_person_number = 1
+            
+            # First check existing person### directories to find the next available number
+            existing_person_dirs = [d for d in os.listdir(self.conversations_dir) 
+                                  if d.startswith("person") and os.path.isdir(os.path.join(self.conversations_dir, d))]
+            
+            if existing_person_dirs:
+                # Extract numbers from existing directories
+                person_numbers = []
+                for d in existing_person_dirs:
+                    try:
+                        num = int(d[6:])  # Extract number after "person"
+                        person_numbers.append(num)
+                    except ValueError:
+                        continue
+                
+                next_person_number = max(person_numbers) + 1
+            
+            # Create the mapping
+            for old_dir in dirs_to_migrate:
+                new_dir = f"person{next_person_number:03d}"
+                migration_map[old_dir] = new_dir
+                next_person_number += 1
+            
+            # Perform the migration
+            for old_dir, new_dir in migration_map.items():
+                old_path = os.path.join(self.conversations_dir, old_dir)
+                new_path = os.path.join(self.conversations_dir, new_dir)
+                
+                # Create the new directory
+                os.makedirs(new_path, exist_ok=True)
+                
+                # Copy all files
+                for item in os.listdir(old_path):
+                    old_item_path = os.path.join(old_path, item)
+                    
+                    # Handle conversation.txt -> conversation_history.txt
+                    if item == "conversation.txt":
+                        new_item_path = os.path.join(new_path, "conversation_history.txt")
+                    else:
+                        new_item_path = os.path.join(new_path, item)
+                    
+                    # Special handling for text files to update person names
+                    if item.endswith(".txt"):
+                        with open(old_item_path, 'r', encoding='utf-8', errors='ignore') as src:
+                            try:
+                                content = src.read()
+                                # Replace old person name with new one in content
+                                content = content.replace(old_dir.upper(), new_dir.upper())
+                                
+                                with open(new_item_path, 'w', encoding='utf-8') as dst:
+                                    dst.write(content)
+                            except Exception as e:
+                                print(f"Error processing file {old_item_path}: {e}")
+                                # Fallback to binary copy if text processing fails
+                                with open(old_item_path, 'rb') as src, open(new_item_path, 'wb') as dst:
+                                    dst.write(src.read())
+                    else:
+                        # For non-text files, just copy them
+                        with open(old_item_path, 'rb') as src, open(new_item_path, 'wb') as dst:
+                            dst.write(src.read())
+                
+                print(f"Migrated {old_dir} to {new_dir}")
+                
+                # Optionally remove the old directory after successful migration
+                # import shutil
+                # shutil.rmtree(old_path)
+            
+            print("Migration completed successfully")
+            
+        except Exception as e:
+            print(f"Error during migration: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _should_continue_conversation(self, person_name, max_time_gap=3600):
+        """
+        Determine if we should continue an existing conversation based on time proximity.
+        
+        Args:
+            person_name: The person's identifier
+            max_time_gap: Maximum time gap in seconds to consider it the same conversation
+            
+        Returns:
+            bool: True if we should continue the existing conversation
+        """
+        try:
+            person_dir = os.path.join(self.conversations_dir, person_name)
+            if not os.path.exists(person_dir):
+                return False
+            
+            # Check the last modified time of the conversation history
+            history_path = os.path.join(person_dir, "conversation_history.txt")
+            if not os.path.exists(history_path):
+                return False
+            
+            last_modified = os.path.getmtime(history_path)
+            current_time = time.time()
+            
+            # If the last conversation was recent, continue it
+            if current_time - last_modified < max_time_gap:
+                print(f"Continuing conversation with {person_name} (last activity: {int((current_time - last_modified) / 60)} minutes ago)")
+                return True
+            else:
+                print(f"Starting new conversation with {person_name} (last activity: {int((current_time - last_modified) / 3600)} hours ago)")
+                return False
+        except Exception as e:
+            print(f"Error checking conversation continuity: {e}")
+            return False 

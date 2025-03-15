@@ -95,9 +95,17 @@ class AudioRecorder:
             print(f"Recording thread error: {e}")
             self.recording = False
     
-    def get_audio_segment(self, duration=CONTINUOUS_PROCESSING_INTERVAL, wait_for_pause=False) -> Tuple[str, bool]:
+    def get_audio_segment(self, duration=CONTINUOUS_PROCESSING_INTERVAL, wait_for_pause=False, trigger_detection=False) -> Tuple[str, bool]:
         """
         Get a segment of audio for processing.
+        
+        Args:
+            duration: Duration of audio to capture (seconds)
+            wait_for_pause: Whether to wait for a pause in speech
+            trigger_detection: If True, optimize for fast trigger detection
+            
+        Returns:
+            Tuple of (audio_file_path, pause_detected)
         """
         if not self.recording:
             return "", False
@@ -110,24 +118,36 @@ class AudioRecorder:
         start_time = time.time()
         found_pause = False
         
+        # For trigger detection, use a shorter collection time
+        actual_duration = 1.0 if trigger_detection else duration
+        
         while self.recording:
             # Try to get data with a short timeout
             try:
-                data = self.audio_buffer.get(timeout=0.1)
+                data = self.audio_buffer.get(timeout=0.05)  # Decreased timeout for faster processing
                 collected_audio.append(data)
             except queue.Empty:
                 pass
             
             # Check if we've collected enough audio
             elapsed = time.time() - start_time
-            if wait_for_pause:
-                if self.pause_detected and elapsed >= 1.0:  # At least 1 second of audio
+            
+            # For trigger detection, use more aggressive timing
+            if trigger_detection and elapsed >= actual_duration:
+                break
+                
+            # For normal processing
+            elif wait_for_pause:
+                # If we detect a pause and have at least 1 second of audio, we're done
+                if self.pause_detected and elapsed >= 1.0:
                     found_pause = True
                     break
+                # Set a maximum duration even if no pause is detected
                 elif elapsed >= duration * 2: 
                     break
+            # For timed collection
             else:
-                if elapsed >= duration:
+                if elapsed >= actual_duration:
                     break
         
         if collected_audio:
@@ -145,7 +165,7 @@ class AudioRecorder:
                 return "", False
         else:
             os.unlink(temp_filename)
-            return "", False 
+            return "", False
 
     def capture_user_voice_reference(self, duration: float = 10.0) -> Optional[str]:
         """

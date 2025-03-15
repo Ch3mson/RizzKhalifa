@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 
 from typing import Dict, List, Tuple, Any, Optional
-from faster_whisper import WhisperModel
-from modules.config import WHISPER_MODEL, DEVICE, COMPUTE_TYPE
+import os
+import tempfile
+from groq import Groq
+from modules.config import SAMPLE_RATE, CHANNELS, GROQ_MODEL, TRIGGER_PHRASE, STOP_PHRASE
 from modules.agents import SpeakerDiarizationAgent
 
 class SpeechToText:
     """
-    Uses Faster-Whisper to transcribe audio to text.
+    Uses Groq API to transcribe audio to text.
     Can also perform speaker diarization if enabled.
     """
-    def __init__(self, model_name=WHISPER_MODEL, use_diarization=False):
-        print(f"Loading Whisper model '{model_name}'...")
-        self.model = WhisperModel(
-            model_name,
-            device=DEVICE,
-            compute_type=COMPUTE_TYPE,
-            download_root="./models",
-        )
+    def __init__(self, model_name="whisper-large-v3", use_diarization=False):
+        print(f"Initializing Groq speech-to-text with model '{model_name}'...")
+        self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        self.model = model_name
         
         # Speaker diarization
         self.use_diarization = use_diarization
@@ -40,18 +38,67 @@ class SpeechToText:
             return True
         return False
     
-    def transcribe(self, audio_file: str) -> str:
+    def _convert_audio_to_base64(self, audio_file: str) -> str:
+        """Convert audio file to base64 for API submission"""
+        import base64
+        with open(audio_file, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    
+    def transcribe(self, audio_file: str, detect_trigger_only=False) -> str:
         """
         Transcribe audio to text without speaker diarization.
+        
+        Args:
+            audio_file: Path to the audio file
+            detect_trigger_only: If True, optimize for speed to just detect trigger phrases
+            
+        Returns:
+            str: Transcribed text
         """
-        segments, _ = self.model.transcribe(
-            audio_file, 
-            beam_size=1,
-            language="en",
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
-        return " ".join([segment.text for segment in segments])
+        try:
+            import requests
+            import json
+            
+            # For OpenAI-compatible Whisper API
+            with open(audio_file, "rb") as audio:
+                # Direct API call to Groq's audio transcription endpoint
+                headers = {
+                    "Authorization": f"Bearer {os.environ.get('GROQ_API_KEY')}",
+                }
+                
+                files = {
+                    "file": audio,
+                }
+                
+                data = {
+                    "model": self.model,
+                }
+                
+                if detect_trigger_only:
+                    # Add a prompt parameter for trigger detection
+                    data["prompt"] = f"Focus on detecting the phrase '{TRIGGER_PHRASE}' or '{STOP_PHRASE}' if present."
+                    # Use temperature=0 for more accurate transcription of specific phrases
+                    data["temperature"] = 0
+                
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data
+                )
+                
+                if response.status_code != 200:
+                    print(f"Error in Groq transcription: Status {response.status_code} - {response.text}")
+                    return ""
+                    
+                result = response.json()
+                return result.get("text", "")
+        
+        except Exception as e:
+            print(f"Error in Groq transcription: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""
     
     def transcribe_with_speakers(self, audio_file: str, num_speakers: int = 2) -> Tuple[str, List[Dict[str, Any]]]:
         """
@@ -61,29 +108,17 @@ class SpeechToText:
             print("Speaker diarization is not enabled, falling back to regular transcription")
             return self.transcribe(audio_file), []
         
-        # Get segments from Whisper
-        result_segments, _ = self.model.transcribe(
-            audio_file, 
-            beam_size=1,
-            language="en",
-            vad_filter=True,
-            word_timestamps=True,  # Need timestamps for diarization
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
+        # First get the basic transcription
+        transcript = self.transcribe(audio_file)
         
-        # Convert to list and add start/end times
-        segments = []
-        for segment in result_segments:
-            segments.append({
-                "text": segment.text,
-                "start": segment.start,
-                "end": segment.end
-            })
-        
-        if not segments:
+        if not transcript:
             return "", []
         
-        # Apply speaker diarization
+        # Then apply speaker diarization
+        # This is a simplified approach - in a real implementation, you'd need to 
+        # align the transcript with the audio timing for proper diarization
+        segments = [{"text": transcript, "start": 0.0, "end": 10.0}]  # Placeholder timing
+        
         segments_with_speakers = self.diarization_agent.process_conversation(
             audio_file, 
             segments, 

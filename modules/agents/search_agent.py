@@ -3,13 +3,14 @@
 from typing import List, Dict
 from langchain_community.utilities import SearchApiAPIWrapper
 from langchain_core.tools import Tool
+from langchain_community.tools import DuckDuckGoSearchRun
 
 class SearchAgent:
     """
     Wraps the SearchApiAPIWrapper to get comprehensive content from websites.
     """
     def __init__(self):
-        self.search = SearchApiAPIWrapper()
+        self.search = DuckDuckGoSearchRun()
         self.tool = Tool(
             name="web_search",
             description="Use web search to find comprehensive, detailed information.",

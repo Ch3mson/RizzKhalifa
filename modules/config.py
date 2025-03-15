@@ -8,7 +8,7 @@ import time
 load_dotenv()
 
 # Check if required API keys are set
-required_env_vars = ["OPENAI_API_KEY", "SEARCHAPI_API_KEY"]
+required_env_vars = ["OPENAI_API_KEY", "SEARCHAPI_API_KEY", "GROQ_API_KEY"]
 missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
 if missing_vars:
     print(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
@@ -18,7 +18,9 @@ if missing_vars:
 SAMPLE_RATE = 16000
 CHANNELS = 1
 WHISPER_MODEL = "small"
-OPENAI_MODEL = "gpt-4o-mini"  
+OPENAI_MODEL = "gpt-4o-mini"
+GROQ_MODEL= "llama-3.3-70b-versatile"
+GROQ_WHISPER_MODEL = "whisper-large-v3"
 BUFFER_SIZE = 512
 SILENCE_THRESHOLD = 0.01
 SILENCE_DURATION = 1.0
@@ -59,6 +61,10 @@ class ConversationState(TypedDict):
     personal_info: List[Dict[str, Any]]
     last_processed: str
     speaker_segments: List[Dict[str, Any]]
+    category: str
+    restart_count: int
+    last_restart: float
+    _routing: str
 
 CONVERSATION_STATE_SCHEMA: ConversationState = {
     "conversation": "",
@@ -67,5 +73,9 @@ CONVERSATION_STATE_SCHEMA: ConversationState = {
     "knowledge_base": {},
     "personal_info": [],
     "last_processed": "",
-    "speaker_segments": []
+    "speaker_segments": [],
+    "category": "",
+    "restart_count": 0,
+    "last_restart": 0.0,
+    "_routing": ""
 } 

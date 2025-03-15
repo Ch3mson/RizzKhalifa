@@ -4,9 +4,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_groq import ChatGroq
 from typing import Dict, List, Any
 
-from modules.config import OPENAI_MODEL
+from modules.config import OPENAI_MODEL, GROQ_MODEL
 
 # Define the prompt template
 SUMMARIZER_PROMPT = ChatPromptTemplate.from_template(
@@ -23,8 +24,8 @@ Return a concise summary as plain text that includes who said what."""
 class SummarizerAgent:
     """Agent that summarizes conversations."""
     
-    def __init__(self, model=OPENAI_MODEL, temperature=0.2):
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
+    def __init__(self, model=GROQ_MODEL, temperature=0.2):
+        self.llm = ChatGroq(model=model, temperature=temperature)
         self.parser = StrOutputParser()
         
         # Build chain

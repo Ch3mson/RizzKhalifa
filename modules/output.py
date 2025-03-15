@@ -22,12 +22,13 @@ class TextOutput:
         print(text)
         print("=============================\n")
         
-    def save_to_file(self, state):
+    def save_to_file(self, state, filename=None):
         """
         Save the current state to a file.
         
         Args:
             state: The current conversation state
+            filename: Optional filename to use instead of timestamp-based name
         """
         try:
             # Create system logs directory
@@ -35,8 +36,11 @@ class TextOutput:
             os.makedirs(logs_dir, exist_ok=True)
             
             # Generate file path
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            output_file = os.path.join(logs_dir, f"workflow_state_{timestamp}.json")
+            if filename:
+                output_file = os.path.join(logs_dir, filename)
+            else:
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                output_file = os.path.join(logs_dir, f"workflow_state_{timestamp}.json")
             
             # Save to file
             with open(output_file, 'w') as f:

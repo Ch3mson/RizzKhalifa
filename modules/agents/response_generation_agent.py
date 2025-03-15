@@ -4,8 +4,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_groq import ChatGroq
 
-from modules.config import OPENAI_MODEL
+from modules.config import OPENAI_MODEL, GROQ_MODEL
+
 
 # Define the prompt template
 KNOWLEDGE_RESPONSE_PROMPT = ChatPromptTemplate.from_template(
@@ -28,8 +30,8 @@ Give an informative reply that:
 class ResponseGenerationAgent:
     """Agent that generates responses based on conversation and knowledge base."""
     
-    def __init__(self, model=OPENAI_MODEL, temperature=0.7):
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
+    def __init__(self, model=GROQ_MODEL, temperature=0.7):
+        self.llm = ChatGroq(model=model, temperature=temperature)
         self.parser = StrOutputParser()
         
         # Build chain

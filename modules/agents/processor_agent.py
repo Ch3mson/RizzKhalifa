@@ -5,8 +5,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_groq import ChatGroq
 
-from modules.config import OPENAI_MODEL
+from modules.config import OPENAI_MODEL, GROQ_MODEL
+from langchain_groq import ChatGroq
 
 # Define the processor prompt template - fixed to avoid variable errors
 # The issue was with the example JSON objects in the template being interpreted as variables
@@ -88,8 +90,8 @@ class ProcessorAgent:
     3. What specific topics to search for
     """
     
-    def __init__(self, model=OPENAI_MODEL, temperature=0.1):
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
+    def __init__(self, model=GROQ_MODEL, temperature=0.1):
+        self.llm = ChatGroq(model=model, temperature=temperature)
         self.parser = JsonOutputParser()
         
         # Build chain - simplified and fixed for reliable execution
