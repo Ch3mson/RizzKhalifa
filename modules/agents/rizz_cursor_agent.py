@@ -5,12 +5,14 @@ import time
 from typing import Dict, List, Any, Optional
 from groq import Groq
 from langchain_groq import ChatGroq
-import datetime
 import threading
 import requests
-import base64
-import json
+from supabase import create_client
+from dotenv import load_dotenv
 from modules.config import GROQ_MODEL
+
+# Load environment variables from .env file
+load_dotenv()
 
 class RizzCursorAgent:
     """
@@ -45,6 +47,19 @@ class RizzCursorAgent:
         self.voice_model = "tts-1"  # OpenAI's text-to-speech model
         self.voice_name = "alloy"  # Natural sounding voice
         self.voice_speed = 1.3  # Faster voice speech (default is 1.0)
+        
+        # Supabase client setup for storage
+        supabase_url = os.environ.get("SUPABASE_URL", "")
+        supabase_key = os.environ.get("SUPABASE_KEY", "")
+        self.use_supabase = supabase_url and supabase_key
+        
+        if self.use_supabase:
+            try:
+                self.supabase_client = create_client(supabase_url, supabase_key)
+                print("Supabase client initialized for voice file uploads")
+            except Exception as e:
+                print(f"Error initializing Supabase client: {e}")
+                self.use_supabase = False
         
         # Make sure cursor_messages directory exists
         os.makedirs("cursor_messages", exist_ok=True)
@@ -317,7 +332,8 @@ class RizzCursorAgent:
         try:
             timestamp = int(time.time())
             filename = f"cursor_messages/message_{timestamp}.mp3"
-            
+            supabase_path = f"audio/message_{timestamp}.mp3"
+                    
             # First try using Groq's API through their client
             try:
                 # Check if Groq supports TTS via system capabilities
@@ -352,9 +368,30 @@ class RizzCursorAgent:
                     )
                     
                     if response.status_code == 200:
-                        # Save the audio file
+                        # Save the audio file locally
                         with open(filename, "wb") as f:
                             f.write(response.content)
+                        
+                        # Upload to Supabase if enabled
+                        if self.use_supabase:
+                            try:
+                                # Upload the MP3 file to Supabase storage
+                                with open(filename, "rb") as f:
+                                    upload_response = (
+                                        self.supabase_client.storage
+                                        .from_("llm")  # Bucket name for audio files
+                                        .upload(
+                                            file=f,
+                                            path=supabase_path,
+                                            file_options={"cache-control": "3600", "upsert": "true"}
+                                        )
+                                    )
+                                print(f"Uploaded voice file to Supabase: {supabase_path}")
+                            except Exception as e:
+                                print(f"Error uploading voice file to Supabase: {e}")
+                                import traceback
+                                traceback.print_exc()
+                        
                         return filename
                     else:
                         print(f"Error generating voice with OpenAI: {response.text}")
