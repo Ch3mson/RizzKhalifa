@@ -33,7 +33,7 @@ class RizzCursorAgent:
         self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         self.last_speaker = None
         self.last_suggestion_time = 0
-        self.suggestion_cooldown = 10.0  # Changed from 20 seconds to 10 seconds as requested
+        self.suggestion_cooldown = 15.0  # Set to 15 seconds as requested
         # Track the last few suggestions to avoid repetition
         self.recent_suggestions = []
         self.max_recent_suggestions = 5
@@ -78,11 +78,22 @@ class RizzCursorAgent:
         print("Rizz agent ready for smooth conversational responses...")
         print(f"Will suggest responses with a {self.suggestion_cooldown} second cooldown period")
         
-        # Mark that active listening has started and generate an immediate response
+        # Mark that active listening has started
         self.active_listening_started = True
         
-        # Generate initial response based on existing conversation
-        self._generate_initial_response(state)
+        # Check if we've recently generated a response or MP3
+        current_time = time.time()
+        time_since_last = current_time - max(self.last_suggestion_time, self.mp3_generation_time)
+        
+        # Only generate initial response if enough time has passed
+        if time_since_last >= self.suggestion_cooldown:
+            print("Generating initial response for active listening mode...")
+            # Generate initial response based on existing conversation
+            self._generate_initial_response(state)
+        else:
+            remaining = self.suggestion_cooldown - time_since_last
+            print(f"Cooldown active. Waiting {remaining:.1f} more seconds before generating initial response...")
+            # We don't generate a response now, but will wait for the next speaker event after cooldown
     
     def _generate_initial_response(self, state: Dict[str, Any]):
         """
@@ -196,26 +207,19 @@ class RizzCursorAgent:
             return False
             
         current_time = time.time()
-        time_since_last = current_time - self.last_suggestion_time
         
-        # Check if we need to wait after MP3 generation
-        time_since_mp3 = current_time - self.mp3_generation_time
-        if self.mp3_generation_time > 0 and time_since_mp3 < 15.0:
-            remaining = 15.0 - time_since_mp3
-            print(f"Waiting {remaining:.1f} more seconds after MP3 generation...")
+        # Use the most recent of last_suggestion_time or mp3_generation_time to enforce cooldown
+        last_activity_time = max(self.last_suggestion_time, self.mp3_generation_time)
+        time_since_last = current_time - last_activity_time
+        
+        # Enforce strict cooldown between any responses, regardless of type
+        if time_since_last < self.suggestion_cooldown:
+            remaining = self.suggestion_cooldown - time_since_last
+            print(f"Waiting {remaining:.1f} more seconds before next suggestion... (last activity at {last_activity_time})")
             return False
         
-        # Skip cooldown check if this is the first response
-        if self.first_response_generated:
-            # Check if we're still in cooldown period
-            if time_since_last < self.suggestion_cooldown:
-                remaining = self.suggestion_cooldown - time_since_last
-                if remaining < 9.0:  # Only log if we're close to being ready again (adjusted for 10s cooldown)
-                    print(f"Waiting {remaining:.1f} more seconds before next suggestion...")
-                return False
-        
         # Always update state and return True to generate a response, even for short messages
-        print(f"Ready to generate response after {time_since_last:.1f} seconds")
+        print(f"Ready to generate response after {time_since_last:.1f} seconds since last activity")
         self.last_speaker = speaker
         self.last_suggestion_time = current_time
         return True
@@ -399,6 +403,25 @@ class RizzCursorAgent:
                                         )
                                     )
                                 print(f"Uploaded voice file to Supabase: {supabase_path}")
+                                
+                                # Insert record into the agent-audio database table
+                                try:
+                                    # Insert a record with the file path and text content
+                                    db_response = (
+                                        self.supabase_client.table("agent-audio")
+                                        .insert({
+                                            "file_url": supabase_path,
+                                            "text_content": text,
+                                            "file_name": filename
+                                        })
+                                        .execute()
+                                    )
+                                    print(f"Inserted record into agent-audio database table")
+                                except Exception as e:
+                                    print(f"Error inserting record into database: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                                
                             except Exception as e:
                                 print(f"Error uploading voice file to Supabase: {e}")
                                 import traceback
@@ -406,7 +429,7 @@ class RizzCursorAgent:
                         
                         # Update MP3 generation time to enforce waiting period
                         self.mp3_generation_time = time.time()
-                        print(f"MP3 generated at {self.mp3_generation_time}, will wait 10 seconds before next response")
+                        print(f"MP3 generated at {self.mp3_generation_time}, will wait {self.suggestion_cooldown} seconds before next response")
                         
                         return filename
                     else:
