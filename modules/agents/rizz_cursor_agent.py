@@ -4,7 +4,6 @@ import os
 import time
 from typing import Dict, List, Any, Optional
 from groq import Groq
-from langchain_groq import ChatGroq
 import threading
 import requests
 from supabase import create_client
