@@ -33,13 +33,14 @@ class RizzCursorAgent:
         self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         self.last_speaker = None
         self.last_suggestion_time = 0
-        self.suggestion_cooldown = 20.0  # Reverted to 20 seconds as requested
+        self.suggestion_cooldown = 10.0  # Changed from 20 seconds to 10 seconds as requested
         # Track the last few suggestions to avoid repetition
         self.recent_suggestions = []
         self.max_recent_suggestions = 5
         self.model = GROQ_MODEL  # Use the model from config.py
         self.first_response_generated = False
         self.active_listening_started = False
+        self.mp3_generation_time = 0  # Track when an MP3 was last generated
         
         # For voice generation
         self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -197,12 +198,19 @@ class RizzCursorAgent:
         current_time = time.time()
         time_since_last = current_time - self.last_suggestion_time
         
+        # Check if we need to wait after MP3 generation
+        time_since_mp3 = current_time - self.mp3_generation_time
+        if self.mp3_generation_time > 0 and time_since_mp3 < 15.0:
+            remaining = 15.0 - time_since_mp3
+            print(f"Waiting {remaining:.1f} more seconds after MP3 generation...")
+            return False
+        
         # Skip cooldown check if this is the first response
         if self.first_response_generated:
             # Check if we're still in cooldown period
             if time_since_last < self.suggestion_cooldown:
                 remaining = self.suggestion_cooldown - time_since_last
-                if remaining < 19.0:  # Only log if we're close to being ready again (adjusted for 20s cooldown)
+                if remaining < 9.0:  # Only log if we're close to being ready again (adjusted for 10s cooldown)
                     print(f"Waiting {remaining:.1f} more seconds before next suggestion...")
                 return False
         
@@ -332,6 +340,10 @@ class RizzCursorAgent:
         try:
             timestamp = int(time.time())
             filename = f"cursor_messages/message_{timestamp}.mp3"
+
+            # print("======== FILE NAME =========")
+            # print(filename)
+            # print("============================")
             supabase_path = f"audio/message_{timestamp}.mp3"
                     
             # First try using Groq's API through their client
@@ -391,6 +403,10 @@ class RizzCursorAgent:
                                 print(f"Error uploading voice file to Supabase: {e}")
                                 import traceback
                                 traceback.print_exc()
+                        
+                        # Update MP3 generation time to enforce waiting period
+                        self.mp3_generation_time = time.time()
+                        print(f"MP3 generated at {self.mp3_generation_time}, will wait 10 seconds before next response")
                         
                         return filename
                     else:
