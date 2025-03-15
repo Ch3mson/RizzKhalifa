@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from typing import Dict, List, Any
+
+from modules.config import OPENAI_MODEL
+
+# Define the prompt template
+SUMMARIZER_PROMPT = ChatPromptTemplate.from_template(
+    """You are an expert summarizer. Summarize the following conversation in a short paragraph:
+
+Conversation:
+{conversation}
+
+{speaker_info}
+
+Return a concise summary as plain text that includes who said what."""
+)
+
+class SummarizerAgent:
+    """Agent that summarizes conversations."""
+    
+    def __init__(self, model=OPENAI_MODEL, temperature=0.2):
+        self.llm = ChatOpenAI(model=model, temperature=temperature)
+        self.parser = StrOutputParser()
+        
+        # Build chain
+        self.chain = (
+            RunnablePassthrough()
+            | SUMMARIZER_PROMPT
+            | self.llm
+            | self.parser
+        )
+    
+    def summarize(self, conversation: str, speaker_segments: List[Dict[str, Any]] = None) -> str:
+        """
+        Generate a summary of the conversation.
+        
+        Args:
+            conversation: The raw conversation text
+            speaker_segments: Optional list of diarized segments with speaker information
+            
+        Returns:
+            str: A summary of the conversation
+        """
+        speaker_info = ""
+        if speaker_segments:
+            # Extract information about speakers and persons
+            speakers = {}
+            for segment in speaker_segments:
+                speaker_id = segment.get("speaker", "UNKNOWN")
+                person_name = segment.get("person", speaker_id)
+                
+                if speaker_id not in speakers:
+                    speakers[speaker_id] = person_name
+            
+            # Format the speaker information
+            if speakers:
+                speaker_info = "Speaker Information:\n"
+                for speaker_id, person_name in speakers.items():
+                    speaker_info += f"- {speaker_id} is {person_name}\n"
+        
+        return self.chain.invoke({
+            "conversation": conversation,
+            "speaker_info": speaker_info
+        }) 
