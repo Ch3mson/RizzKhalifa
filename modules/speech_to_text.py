@@ -93,7 +93,42 @@ class SpeechToText:
                     return ""
                     
                 result = response.json()
-                return result.get("text", "")
+                transcription = result.get("text", "").strip()
+                
+                # Filter out common noise words when they appear alone
+                noise_words = ["you", "my", "me", "i", "a", "the", "um", "uh", "ah", "oh", "eh"]
+                
+                # Filter out common hallucinated phrases
+                hallucination_phrases = ["thank you", "thanks", "thank", "you're welcome"]
+                
+                # Check for hallucinated phrases
+                cleaned_text = transcription.lower()
+                for phrase in hallucination_phrases:
+                    if phrase in cleaned_text:
+                        print(f"Filtering out hallucinated phrase in transcription: '{transcription}'")
+                        return ""
+                
+                # Check if it's just a single word with possible punctuation
+                words = cleaned_text.split()
+                if len(words) == 1:
+                    # Remove punctuation from the word
+                    clean_word = words[0].rstrip('.!?,:;')
+                    if clean_word in noise_words:
+                        print(f"Filtering out noise word in transcription: '{transcription}'")
+                        return ""
+                
+                # Explicitly filter out "you" in various forms
+                if transcription.lower() == "you" or transcription.lower() in ["you.", "you?", "you!"]:
+                    print(f"Filtering out single word 'you': '{transcription}'")
+                    return ""
+                
+                # Add confidence filtering - if available in the API response
+                confidence = result.get("confidence", 1.0)
+                if confidence < 0.7:  # Adjust threshold as needed
+                    print(f"Low confidence transcription ({confidence}): {transcription}")
+                    return ""
+                
+                return transcription
         
         except Exception as e:
             print(f"Error in Groq transcription: {e}")
@@ -126,10 +161,48 @@ class SpeechToText:
             num_speakers=num_speakers
         )
         
-        # Create a full transcript with speaker labels
+        # Filter out noise segments
+        filtered_segments = []
+        noise_words = ["you", "my", "me", "i", "a", "the", "um", "uh", "ah", "oh", "eh"]
+        hallucination_phrases = ["thank you", "thanks", "thank", "you're welcome"]
+        
+        for segment in segments_with_speakers:
+            segment_text = segment.get("text", "").strip().lower()
+            
+            # Skip empty segments
+            if not segment_text:
+                continue
+                
+            # Skip hallucinated "thank you" segments
+            hallucinated = False
+            for phrase in hallucination_phrases:
+                if phrase in segment_text:
+                    print(f"Filtering out hallucinated segment: '{segment_text}'")
+                    hallucinated = True
+                    break
+            
+            if hallucinated:
+                continue
+                
+            # Check if it's just a single noise word
+            words = segment_text.split()
+            if len(words) == 1:
+                clean_word = words[0].rstrip('.!?,:;')
+                if clean_word in noise_words or len(clean_word) < 3:
+                    print(f"Filtering out noise segment: '{segment_text}'")
+                    continue
+            
+            # Keep this segment
+            filtered_segments.append(segment)
+        
+        # If all segments were filtered, return empty
+        if not filtered_segments:
+            return "", []
+        
+        # Create a full transcript with speaker labels from filtered segments
         formatted_segments = []
         current_speaker = None
-        for segment in segments_with_speakers:
+        for segment in filtered_segments:
             if segment["speaker"] != current_speaker:
                 current_speaker = segment["speaker"]
                 formatted_segments.append(f"\n[{current_speaker}]: {segment['text']}")
@@ -138,4 +211,4 @@ class SpeechToText:
         
         full_transcript = " ".join(formatted_segments)
         
-        return full_transcript, segments_with_speakers 
+        return full_transcript, filtered_segments 
