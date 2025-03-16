@@ -129,6 +129,9 @@ class FacialRecognitionModule:
         self.current_face_embedding = None
         self.last_face_check_time = 0
         
+        # Clear the current_user_id.txt file at initialization
+        self.clear_current_user_id()
+        
         # Load existing face database by scanning directories
         self._load_face_db()
         
@@ -396,6 +399,9 @@ class FacialRecognitionModule:
                             
                             # Update the current face and explicitly save the face image
                             self.update_current_face(name, face_embedding, face_image)
+                            
+                            # Write the user ID to file (this is an existing face)
+                            self.write_current_user_id(name, is_new_face=False)
                     
                     # If no match found, create a new person
                     if not name:
@@ -412,6 +418,7 @@ class FacialRecognitionModule:
                             self.logger.info(f"Created new person folder: {person_id}")
                         
                         # Create a consistent name with timestamp
+                        current_time = int(time.time())
                         new_name = f"Person_{current_time}"
                         # Only increment if we're creating different faces
                         if len(self.known_faces) > 0:
@@ -425,6 +432,9 @@ class FacialRecognitionModule:
                         
                         # Save the face image for the new person - explicitly call with face image
                         self.update_current_face(new_name, face_embedding, face_image)
+                        
+                        # Write the user ID to file (this is a new face)
+                        self.write_current_user_id(new_name, is_new_face=True)
                     
                     # Add result
                     results.append({
@@ -1419,6 +1429,10 @@ class FacialRecognitionModule:
             os.rename(temp_file_path, permanent_path)
             print(f"Nothing found adding temp file as: {face_id}")
             self.logger.info(f"Added first face with ID: {face_id}")
+            
+            # Write the user ID to file (this is a new face)
+            self.write_current_user_id(face_id, is_new_face=True)
+            
             return face_id, True
         
         print(f"Found {len(existing_faces)} existing faces. Checking for matches...")
@@ -1477,6 +1491,10 @@ class FacialRecognitionModule:
             print(f"Found matching face: {best_match} (similarity: {best_similarity:.4f})")
             print(f"Found matching face deleting temp and not doing anything")
             self.logger.info(f"Matched existing face: {best_match} (similarity: {best_similarity:.4f})")
+            
+            # Write the user ID to file (this is an existing face)
+            self.write_current_user_id(best_match, is_new_face=False)
+            
             return best_match, False
         else:
             # No match found, add as a new face
@@ -1485,6 +1503,10 @@ class FacialRecognitionModule:
             os.rename(temp_file_path, permanent_path)
             print(f"No matching face found adding new face with ID: {face_id}")
             self.logger.info(f"Added new face with ID: {face_id}")
+            
+            # Write the user ID to file (this is a new face)
+            self.write_current_user_id(face_id, is_new_face=True)
+            
             return face_id, True
     
     def _calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
@@ -1528,6 +1550,98 @@ class FacialRecognitionModule:
         except Exception as e:
             print(f"Error calculating similarity: {e}")
             return 0
+
+    def write_current_user_id(self, face_id: str, is_new_face: bool = None) -> None:
+        """
+        Writes just the numeric part of the face ID to current_user_id.txt.
+        Also indicates if this is a new face (needs upload) or existing face (skip upload).
+        
+        Args:
+            face_id: Face identifier in the format "face_TIMESTAMP"
+            is_new_face: Flag indicating if this is a new face (True) or existing face (False)
+                        If None, will auto-detect based on the context
+        """
+        try:
+            if face_id is None:
+                print("No face ID to write to current_user_id.txt")
+                return
+                
+            # Extract just the numeric part from the face ID
+            if "_" in face_id:
+                user_id = face_id.split("_")[1]  # Get the part after "face_"
+            else:
+                user_id = face_id
+            
+            # Write the ID to the file in the project root directory
+            output_file = os.path.join(os.getcwd(), "current_user_id.txt")
+            
+            # If a new face (that should be uploaded to Supabase), use a simple number
+            # If existing (already in Supabase), add "skip_upload:" prefix
+            if is_new_face is False:  # Explicitly False (existing face)
+                output_text = f"skip_upload:{user_id}"
+                print(f"Wrote user ID {user_id} to current_user_id.txt (existing face, skipping Supabase upload)")
+            else:
+                output_text = user_id
+                print(f"Wrote user ID {user_id} to current_user_id.txt (new face, ready for Supabase upload)")
+                
+            with open(output_file, 'w') as f:  # 'w' mode overwrites existing content
+                f.write(output_text)
+            
+        except Exception as e:
+            print(f"Error writing current user ID to file: {e}")
+
+    def clear_current_user_id(self) -> None:
+        """
+        Clears the contents of the current_user_id.txt file or creates it if it doesn't exist.
+        This is called at initialization to ensure a clean state for each new run.
+        """
+        try:
+            # Create an empty file in the project root directory
+            output_file = os.path.join(os.getcwd(), "current_user_id.txt")
+            with open(output_file, 'w') as f:
+                f.write("NO_FACE_DETECTED")
+            print("Cleared current_user_id.txt file")
+        except Exception as e:
+            print(f"Error clearing current_user_id.txt: {e}")
+
+    @staticmethod
+    def should_upload_to_supabase() -> Tuple[bool, str]:
+        """
+        Static helper method to determine if the current face should be uploaded to Supabase.
+        This checks the content of current_user_id.txt and returns whether to upload and the face ID.
+        
+        Returns:
+            Tuple[bool, str]: (should_upload, face_id)
+                - should_upload: True if the face should be uploaded, False otherwise
+                - face_id: The numeric face ID or None if no valid ID exists
+        """
+        try:
+            output_file = os.path.join(os.getcwd(), "current_user_id.txt")
+            if not os.path.exists(output_file):
+                print("User ID file doesn't exist, cannot determine if upload is needed")
+                return False, None
+                
+            with open(output_file, 'r') as f:
+                content = f.read().strip()
+                
+            # Check for special cases
+            if content == "NO_FACE_DETECTED" or not content:
+                print("No face detected, nothing to upload")
+                return False, None
+                
+            # Check if this is an existing face that should be skipped
+            if content.startswith("skip_upload:"):
+                face_id = content.split("skip_upload:")[1]
+                print(f"Face ID {face_id} already exists in Supabase, skipping upload")
+                return False, face_id
+                
+            # This is a new face ID that needs to be uploaded
+            print(f"Face ID {content} is new and should be uploaded to Supabase")
+            return True, content
+            
+        except Exception as e:
+            print(f"Error checking if face should be uploaded: {e}")
+            return False, None
 
 def merge_person_folders_cli():
     """Command-line interface to merge person folders."""

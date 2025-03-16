@@ -299,6 +299,12 @@ class CursorAssistant:
             print("\n🎧 ACTIVE LISTENING MODE ENABLED 🎧")
             print("Providing smooth, charismatic dating responses based on the conversation")
             
+            # Check and load knowledge base in the rizz agent if needed
+            try:
+                self.rizz_agent._check_knowledge_base()
+            except Exception as e:
+                print(f"Warning: Could not check knowledge base: {e}")
+            
             # Immediately prepare the rizz agent to have suggestions ready
             state = self._get_state_from_history()
             print("Preparing rizz agent for impressive conversational suggestions...")

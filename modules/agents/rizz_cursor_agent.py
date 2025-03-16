@@ -48,6 +48,16 @@ class RizzCursorAgent:
         self.voice_name = "alloy"  # Natural sounding voice
         self.voice_speed = 1.3  # Faster voice speech (default is 1.0)
         
+        # For knowledge base
+        self.knowledge_base_size_threshold = 25000  # Character threshold
+        self.knowledge_base_content = None  # Will store the knowledge base if under threshold
+        
+        # Try to initialize knowledge base for faster first response
+        try:
+            self._check_knowledge_base()
+        except Exception as e:
+            print(f"Warning: Failed to check knowledge base: {e}")
+        
         # Supabase client setup for storage
         supabase_url = os.environ.get("SUPABASE_URL", "")
         supabase_key = os.environ.get("SUPABASE_KEY", "")
@@ -237,6 +247,9 @@ class RizzCursorAgent:
             str: A witty, thoughtful response that makes the user sound impressive
         """
         try:
+            # Check knowledge base to ensure we have the latest content
+            self._check_knowledge_base()
+            
             # Get the entire conversation history
             entire_conversation = state.get("conversation", "")
             
@@ -249,6 +262,15 @@ class RizzCursorAgent:
             # Get context from multiple recent messages for context
             recent_context = self._get_combined_recent_messages(state, 3)  # Get up to 3 recent messages for context
             
+            # Add knowledge base if available and under size threshold
+            knowledge_base_context = ""
+            if self.knowledge_base_content:
+                # Include the entire knowledge base directly in the prompt
+                knowledge_base_context = f"""
+                ### User Knowledge Base:
+                {self.knowledge_base_content}
+                """
+            
             # Dating-specific prompt for charismatic responses
             system_message = f"""
             You are an expert dating coach who helps people sound smooth, charismatic, and impressive on dates.
@@ -260,6 +282,8 @@ class RizzCursorAgent:
             
             Recent conversation context:
             {recent_context}
+            
+            {knowledge_base_context}
             
             Generate ONE smooth, charismatic response that the person could say to sound impressive and create a connection.
             
@@ -677,3 +701,83 @@ class RizzCursorAgent:
             traceback.print_exc()
             # Return a default sentiment if analysis fails
             return {"sentiment": "neutral", "confidence": 0.5, "emotion": "unknown"}
+
+    def _check_knowledge_base(self) -> None:
+        """
+        Check if a knowledge base exists for the current user and if its size
+        exceeds the threshold. If under threshold, load into knowledge_base_content
+        for direct inclusion in the prompt.
+        """
+        # First, get the current user ID
+        user_id = self._get_current_user_id()
+        if not user_id:
+            print("No user ID found. Cannot load knowledge base.")
+            self.knowledge_base_content = None
+            return
+        
+        # Define the knowledge base path
+        kb_path = os.path.join(
+            os.getcwd(),
+            "conversations", 
+            f"conversation_{user_id}", 
+            "knowledge_base.txt"
+        )
+        
+        # Check if knowledge base exists
+        if not os.path.exists(kb_path):
+            print(f"No knowledge base found at {kb_path}")
+            self.knowledge_base_content = None
+            return
+        
+        # Get the size of the knowledge base
+        try:
+            with open(kb_path, 'r') as f:
+                content = f.read()
+            
+            kb_size = len(content)
+            print(f"Knowledge base size: {kb_size} characters")
+            
+            # If under threshold, include directly in the prompt
+            if kb_size <= self.knowledge_base_size_threshold:
+                print(f"Knowledge base under {self.knowledge_base_size_threshold} characters. Including in prompt directly.")
+                self.knowledge_base_content = content
+            else:
+                print(f"Knowledge base exceeds {self.knowledge_base_size_threshold} characters. Too large to include directly.")
+                self.knowledge_base_content = None
+                
+        except Exception as e:
+            print(f"Error checking knowledge base: {e}")
+            self.knowledge_base_content = None
+    
+    def _get_current_user_id(self) -> Optional[str]:
+        """
+        Get the current user ID from current_user_id.txt.
+        Returns None if no valid user ID exists.
+        """
+        user_id_file = os.path.join(os.getcwd(), "current_user_id.txt")
+        
+        if not os.path.exists(user_id_file):
+            print("current_user_id.txt file not found")
+            return None
+        
+        try:
+            with open(user_id_file, 'r') as f:
+                content = f.read().strip()
+            
+            # Check special cases
+            if content == "NO_FACE_DETECTED" or not content:
+                print("No face detected, no user ID available")
+                return None
+            
+            # Handle existing face format
+            if content.startswith("skip_upload:"):
+                user_id = content.split("skip_upload:")[1]
+            else:
+                user_id = content
+            
+            print(f"Current user ID: {user_id}")
+            return user_id
+            
+        except Exception as e:
+            print(f"Error reading current user ID: {e}")
+            return None

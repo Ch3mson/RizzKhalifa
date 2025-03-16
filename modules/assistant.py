@@ -376,56 +376,56 @@ class ConversationAssistant:
                     if audio_detected:
                         # STEP 2: If we haven't found a face yet, try to find one
                         if not face_detected:
-                            print("Looking for a face to track...")
+                            # print("Looking for a face to track...")
                             # Capture screen with robust error handling
                             frame = self._capture_screen_frame()
                             if frame is None:
-                                raise Exception("Failed to capture valid screen frame")
+                                # raise Exception("Failed to capture valid screen frame")
                                 
                             # Try to detect faces in the current frame
-                            if self.facial_recognition:
-                                try:
-                                    face_results = self.facial_recognition.process_video_frame(frame)
-                                    if face_results:
-                                        face_info = face_results[0]  # Get first (largest) detected face
-                                        face_name = face_info["name"]
-                                        face_embedding = face_info["embedding"]
-                                        
-                                        # Add to consistency buffer
-                                        face_consistency_buffer.append(face_name)
-                                        
-                                        # Only proceed if we have enough consistent detections
-                                        if len(face_consistency_buffer) >= required_consistent_detections:
-                                            # Check if the majority of detections are the same person
-                                            from collections import Counter
-                                            face_counts = Counter(face_consistency_buffer)
-                                            most_common_face, count = face_counts.most_common(1)[0]
+                                if self.facial_recognition:
+                                    try:
+                                        face_results = self.facial_recognition.process_video_frame(frame)
+                                        if face_results:
+                                            face_info = face_results[0]  # Get first (largest) detected face
+                                            face_name = face_info["name"]
+                                            face_embedding = face_info["embedding"]
                                             
-                                            if count >= required_consistent_detections * 0.7:  # At least 70% agreement
-                                                # Store the current face information
-                                                current_face_name = most_common_face
-                                                self.facial_recognition.update_current_face(most_common_face, face_embedding)
-                                                face_detected = True
+                                            # Add to consistency buffer
+                                            face_consistency_buffer.append(face_name)
+                                            
+                                            # Only proceed if we have enough consistent detections
+                                            if len(face_consistency_buffer) >= required_consistent_detections:
+                                                # Check if the majority of detections are the same person
+                                                from collections import Counter
+                                                face_counts = Counter(face_consistency_buffer)
+                                                most_common_face, count = face_counts.most_common(1)[0]
                                                 
-                                                print(f"✓ Face consistently detected! Identified as: {current_face_name}")
-                                                print(f"The same person will be used for the entire conversation")
-                                                print(f"Face will be rechecked every {self.facial_recognition.get_recheck_interval()} seconds")
-                                                
-                                                # For all future audio segments, associate with this person
-                                                for segment in self.workflow.speaker_segments:
-                                                    segment["person"] = current_face_name
-                                                
-                                                # Update the workflow state
-                                                if hasattr(self.workflow, 'state'):
-                                                    if "speaker_segments" in self.workflow.state:
-                                                        for segment in self.workflow.state["speaker_segments"]:
-                                                            segment["person"] = current_face_name
+                                                if count >= required_consistent_detections * 0.7:  # At least 70% agreement
+                                                    # Store the current face information
+                                                    current_face_name = most_common_face
+                                                    self.facial_recognition.update_current_face(most_common_face, face_embedding)
+                                                    face_detected = True
+                                                    
+                                                    print(f"✓ Face consistently detected! Identified as: {current_face_name}")
+                                                    print(f"The same person will be used for the entire conversation")
+                                                    print(f"Face will be rechecked every {self.facial_recognition.get_recheck_interval()} seconds")
+                                                    
+                                                    # For all future audio segments, associate with this person
+                                                    for segment in self.workflow.speaker_segments:
+                                                        segment["person"] = current_face_name
+                                                    
+                                                    # Update the workflow state
+                                                    if hasattr(self.workflow, 'state'):
+                                                        if "speaker_segments" in self.workflow.state:
+                                                            for segment in self.workflow.state["speaker_segments"]:
+                                                                segment["person"] = current_face_name
+                                                else:
+                                                    print(f"Face detections not consistent enough. Continuing to collect samples...")
                                             else:
-                                                print(f"Face detections not consistent enough. Continuing to collect samples...")
-                                        else:
-                                            print(f"Detected face: {face_name} ({len(face_consistency_buffer)}/{required_consistent_detections} samples)")
-                                except Exception as e:
-                                    print(f"Error in face detection: {e}")
+                                                print(f"Detected face: {face_name} ({len(face_consistency_buffer)}/{required_consistent_detections} samples)")
+                                    except Exception as e:
+                                        print(f"Error in face detection: {e}")
                         
                         # STEP 3: If we already have a face, only check periodically if it's still the same person
                         elif self.facial_recognition and self.facial_recognition.should_recheck_face():
