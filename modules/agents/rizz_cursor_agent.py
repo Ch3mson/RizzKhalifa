@@ -349,6 +349,9 @@ class RizzCursorAgent:
             # print("============================")
             supabase_path = f"audio/message_{timestamp}.mp3"
                     
+            # Analyze sentiment of the text
+            sentiment = self._analyze_sentiment(text)
+                
             # First try using Groq's API through their client
             try:
                 # Check if Groq supports TTS via system capabilities
@@ -405,17 +408,18 @@ class RizzCursorAgent:
                                 
                                 # Insert record into the agent-audio database table
                                 try:
-                                    # Insert a record with the file path and text content
+                                    # Insert a record with the file path, text content, and sentiment analysis
                                     db_response = (
                                         self.supabase_client.table("agent-audio")
                                         .insert({
                                             "file_url": supabase_path,
                                             "text_content": text,
-                                            "file_name": filename
+                                            "file_name": filename,
+                                            "sentiment": sentiment
                                         })
                                         .execute()
                                     )
-                                    print(f"Inserted record into agent-audio database table")
+                                    print(f"Inserted record with sentiment analysis into agent-audio database table")
                                 except Exception as e:
                                     print(f"Error inserting record into database: {e}")
                                     import traceback
@@ -604,3 +608,72 @@ class RizzCursorAgent:
             
         # Return the last N segments
         return segments[-min(len(segments), num_segments):] 
+    
+    def _analyze_sentiment(self, text: str) -> Dict[str, Any]:
+        """
+        Analyze the sentiment of the given text using VADER.
+        
+        Args:
+            text: The text to analyze
+            
+        Returns:
+            Dict: A dictionary containing sentiment analysis results
+        """
+        try:
+            # Import VADER sentiment analyzer
+            from nltk.sentiment.vader import SentimentIntensityAnalyzer
+            
+            # Initialize the analyzer (first time will download lexicon if needed)
+            try:
+                analyzer = SentimentIntensityAnalyzer()
+            except:
+                import nltk
+                nltk.download('vader_lexicon')
+                analyzer = SentimentIntensityAnalyzer()
+            
+            # Get sentiment scores
+            scores = analyzer.polarity_scores(text)
+            
+            # Determine sentiment category
+            if scores['compound'] >= 0.05:
+                sentiment = "positive"
+            elif scores['compound'] <= -0.05:
+                sentiment = "negative"
+            else:
+                sentiment = "neutral"
+            
+            # Map to primary emotion (simplified)
+            if sentiment == "positive":
+                if scores['pos'] > 0.5:
+                    emotion = "happy"
+                else:
+                    emotion = "content"
+            elif sentiment == "negative":
+                if scores['neg'] > 0.5:
+                    emotion = "angry"
+                else:
+                    emotion = "sad"
+            else:
+                emotion = "neutral"
+            
+            sentiment_data = {
+                "sentiment": sentiment,
+                "confidence": abs(scores['compound']),
+                "emotion": emotion,
+                "scores": {
+                    "positive": scores['pos'],
+                    "negative": scores['neg'],
+                    "neutral": scores['neu'],
+                    "compound": scores['compound']
+                }
+            }
+            
+            print(f"Sentiment analysis completed: {sentiment_data}")
+            return sentiment_data
+            
+        except Exception as e:
+            print(f"Error analyzing sentiment: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return a default sentiment if analysis fails
+            return {"sentiment": "neutral", "confidence": 0.5, "emotion": "unknown"}
