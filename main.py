@@ -138,21 +138,20 @@ def load_existing_conversation_data(face_id):
                 chat_history_files.sort(reverse=True)
                 most_recent = chat_history_files[0]
                 
-                # Load the most recent chat history
+                # Load the most recent chat history - but DON'T use it to initialize the workflow state
+                # The conversation history is now just the turns of dialog, not the complete state
                 most_recent_path = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}", most_recent)
                 if os.path.exists(most_recent_path):
                     with open(most_recent_path, 'r') as f2:
-                        most_recent_data = json.load(f2)
-                        print(f"Loaded most recent conversation from: {most_recent}")
-                        print(f"Last updated: {most_recent_data.get('last_updated', 'unknown')}")
-                        
-                        # Merge the most recent data into our return data
-                        data.update({
-                            "conversation": most_recent_data.get("conversation", ""),
-                            "summary": most_recent_data.get("summary", ""),
-                            "topics": most_recent_data.get("topics", []),
-                            "speaker_segments": most_recent_data.get("speaker_segments", [])
-                        })
+                        try:
+                            most_recent_data = json.load(f2)
+                            print(f"Loaded most recent conversation from: {most_recent}")
+                            print(f"Found {len(most_recent_data)} conversation turns")
+                            
+                            # This is now just an array of conversation turns, not the full state
+                            # We don't directly update the workflow state with this
+                        except json.JSONDecodeError:
+                            print(f"Error reading chat history file: {most_recent}")
             
             # Print a summary
             kb = data.get("knowledge_base", {})
@@ -339,23 +338,12 @@ def init_conversation_directory(face_id):
         
         print(f"Initialized conversation directory: {conv_dir}")
         
-        # Create the new timestamped chat history file
+        # Create the new timestamped chat history file - empty array for conversation turns
         chat_history_path = os.path.join(conv_dir, f"chat_history_{CURRENT_RUN_TIMESTAMP}.json")
         
-        # Initialize the JSON file with empty structure
+        # Initialize the JSON file with empty array - just for conversation
         with open(chat_history_path, 'w') as f:
-            json.dump({
-                "face_id": face_id,
-                "run_timestamp": CURRENT_RUN_TIMESTAMP,
-                "created_at": time.strftime('%Y-%m-%d %H:%M:%S'),
-                "last_updated": time.strftime('%Y-%m-%d %H:%M:%S'),
-                "conversation": "",
-                "summary": "",
-                "topics": [],
-                "knowledge_base": {},
-                "personal_info": [],
-                "speaker_segments": [],
-            }, f, indent=2)
+            json.dump([], f, indent=2)
             
         print(f"Created new chat history file for this run: {chat_history_path}")
         
@@ -415,39 +403,94 @@ def update_conversation_files(state, previous_state=None):
             print(f"Conversation directory does not exist, creating: {conv_dir}")
             init_conversation_directory(CURRENT_FACE_ID)
         
-        # Update timestamped chat history JSON file
+        # Update timestamped chat history JSON file - containing ONLY the conversation
         chat_history_path = os.path.join(conv_dir, f"chat_history_{CURRENT_RUN_TIMESTAMP}.json")
         
-        # Read current content of the JSON file
-        current_json_data = {}
-        if os.path.exists(chat_history_path):
-            with open(chat_history_path, 'r') as f:
-                try:
-                    current_json_data = json.load(f)
-                except json.JSONDecodeError:
-                    print(f"Error reading JSON file, initializing new data")
-                    current_json_data = {}
-        
-        # Update the JSON data with the current state
-        current_json_data.update({
-            "face_id": CURRENT_FACE_ID,
-            "run_timestamp": CURRENT_RUN_TIMESTAMP,
-            "last_updated": time.strftime('%Y-%m-%d %H:%M:%S'),
-            "conversation": state.get("conversation", ""),
-            "summary": state.get("summary", ""),
-            "topics": state.get("topics", []),
-            "knowledge_base": state.get("knowledge_base", {}),
-            "personal_info": state.get("personal_info", []),
-            "speaker_segments": state.get("speaker_segments", []),
-            "category": state.get("category", ""),
-            "last_processed": state.get("last_processed", "")
-        })
-        
-        # Write the updated JSON data back to the file
-        with open(chat_history_path, 'w') as f:
-            json.dump(current_json_data, f, indent=2)
-        
-        print(f"Updated chat history file for this run: {chat_history_path}")
+        # Only proceed if we have conversation content
+        if "conversation" in state and state["conversation"]:
+            # Parse the conversation content
+            conversation_content = state["conversation"]
+            
+            # Process the raw conversation text into a structured JSON format
+            # The conversation usually has format like:
+            # [USER]: message content
+            # [ASSISTANT]: response content
+            
+            conversation_turns = []
+            
+            # Split by speaker turns and process
+            if conversation_content:
+                lines = conversation_content.split('\n')
+                current_speaker = None
+                current_message = []
+                
+                for line in lines:
+                    if line.startswith('[USER]:'):
+                        # If we were building a previous message, save it
+                        if current_speaker:
+                            conversation_turns.append({
+                                "speaker": current_speaker,
+                                "message": '\n'.join(current_message).strip()
+                            })
+                            current_message = []
+                        
+                        # Start a new user message
+                        current_speaker = "USER"
+                        content = line[len('[USER]:'):].strip()
+                        if content:  # Only add if there's content on this line
+                            current_message.append(content)
+                    
+                    elif line.startswith('[ASSISTANT]:'):
+                        # If we were building a previous message, save it
+                        if current_speaker:
+                            conversation_turns.append({
+                                "speaker": current_speaker,
+                                "message": '\n'.join(current_message).strip()
+                            })
+                            current_message = []
+                        
+                        # Start a new assistant message
+                        current_speaker = "ASSISTANT"
+                        content = line[len('[ASSISTANT]:'):].strip()
+                        if content:  # Only add if there's content on this line
+                            current_message.append(content)
+                    
+                    elif line.startswith('[SPEAKER '):
+                        # Handle other speakers (like [SPEAKER 1]:)
+                        # If we were building a previous message, save it
+                        if current_speaker:
+                            conversation_turns.append({
+                                "speaker": current_speaker,
+                                "message": '\n'.join(current_message).strip()
+                            })
+                            current_message = []
+                        
+                        # Extract speaker number and start new message
+                        import re
+                        speaker_match = re.match(r'\[SPEAKER (\d+)\]:', line)
+                        if speaker_match:
+                            speaker_num = speaker_match.group(1)
+                            current_speaker = f"SPEAKER {speaker_num}"
+                            content = line[line.find(':')+1:].strip()
+                            if content:  # Only add if there's content on this line
+                                current_message.append(content)
+                    
+                    elif current_speaker:
+                        # Continue building the current message
+                        current_message.append(line)
+                
+                # Don't forget to add the last message if there is one
+                if current_speaker and current_message:
+                    conversation_turns.append({
+                        "speaker": current_speaker,
+                        "message": '\n'.join(current_message).strip()
+                    })
+            
+            # Write just the conversation turns to the JSON file
+            with open(chat_history_path, 'w') as f:
+                json.dump(conversation_turns, f, indent=2)
+            
+            print(f"Updated chat history file with {len(conversation_turns)} conversation turns")
         
         # Also update the knowledge base txt file
         if "knowledge_base" in state:
