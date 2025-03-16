@@ -790,16 +790,19 @@ class ConversationAssistant:
         # Set up system subdirectories
         system_logs_dir = os.path.join(self.conversations_dir, "system_logs")
         system_data_dir = os.path.join(self.conversations_dir, "system_data")
-        temp_dir = os.path.join(os.path.dirname(self.conversations_dir), "temp_files")
+        faces_dir = os.path.join(self.conversations_dir, "faces")
+        temp_dir = os.path.join(os.getcwd(), "temp_files")
         
         os.makedirs(system_logs_dir, exist_ok=True)
         os.makedirs(system_data_dir, exist_ok=True)
+        os.makedirs(faces_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
         
         print(f"Directory structure initialized:")
         print(f"- Conversations: {self.conversations_dir}")
         print(f"- System logs: {system_logs_dir}")
         print(f"- System data: {system_data_dir}")
+        print(f"- Faces: {faces_dir}")
         print(f"- Temporary files: {temp_dir}")
 
     def stop(self):
@@ -835,9 +838,6 @@ class ConversationAssistant:
             except:
                 pass
         
-        # Save final conversation data for all recognized persons
-        self._save_final_conversation_data()
-        
         # Organize directories and clean up any misplaced files
         self._cleanup_directories()
         
@@ -845,40 +845,39 @@ class ConversationAssistant:
     
     def _cleanup_directories(self):
         """
-        Ensures all conversation data is properly organized in person folders.
-        Moves any misplaced files to the appropriate person directory or system folders.
+        Ensures system directories exist and moves any misplaced files to system folders.
         """
         try:
-            print("\nCleaning up and organizing conversation directories...")
+            print("\nCleaning up directories...")
             # Ensure system directories exist
             system_logs_dir = os.path.join(self.conversations_dir, "system_logs")
             system_data_dir = os.path.join(self.conversations_dir, "system_data")
+            faces_dir = os.path.join(self.conversations_dir, "faces")
+            temp_dir = os.path.join(os.getcwd(), "temp_files")
+            
             os.makedirs(system_logs_dir, exist_ok=True)
             os.makedirs(system_data_dir, exist_ok=True)
+            os.makedirs(faces_dir, exist_ok=True)
+            os.makedirs(temp_dir, exist_ok=True)
             
             # Get all files in the main conversations directory
             for item in os.listdir(self.conversations_dir):
                 item_path = os.path.join(self.conversations_dir, item)
                 
                 # Skip directories and system folders
-                if os.path.isdir(item_path) or item in ["system_logs", "system_data", "temp_files"]:
+                if os.path.isdir(item_path) or item in ["system_logs", "system_data", "faces", "temp_files"]:
                     continue
                 
-                # Handle misplaced files
-                if item.startswith("conversation_") or item.endswith(".txt"):
-                    # Move conversation files to system logs
+                # Move all loose files to system directories
+                if item.endswith(".txt"):
+                    # Move text files to system logs
                     destination = os.path.join(system_logs_dir, item)
                     print(f"Moving {item} to system logs directory")
                     os.rename(item_path, destination)
-                elif item.endswith(".pkl"):
-                    # Move database files to system data
-                    destination = os.path.join(system_data_dir, item)
-                    print(f"Moving {item} to system data directory")
-                    os.rename(item_path, destination)
                 else:
-                    # Unsure about file type, move to system data
+                    # Move other files to system data
                     destination = os.path.join(system_data_dir, item)
-                    print(f"Moving unknown file {item} to system data directory")
+                    print(f"Moving file {item} to system data directory")
                     os.rename(item_path, destination)
                     
             print("Directory cleanup completed")
@@ -887,277 +886,13 @@ class ConversationAssistant:
             import traceback
             traceback.print_exc()
     
-    def _save_final_conversation_data(self):
-        """
-        Save the final conversation data for all recognized persons.
-        Uses a simplified structure with just one directory per person and consistent files:
-        1. conversation_history.txt - Complete conversation history
-        2. conversation_1.txt, conversation_2.txt, etc. - Individual conversations
-        3. knowledge_base.txt - Knowledge base for interests
-        4. topics.txt - Topics of interest
-        5. face_embedding.pkl - Face embedding data when available
-        """
-        print("\nSaving final conversation data...")
-        
-        try:
-            # Get the current state from workflow
-            if not self.workflow or not hasattr(self.workflow, 'state'):
-                print("No workflow state available to save")
-                return
-                
-            state = self.workflow.state
-            
-            # Get knowledge base and conversation history
-            knowledge_base = state.get('knowledge_base', {})
-            conversation = state.get('conversation', '')
-            topics = state.get('topics', [])
-            speaker_segments = state.get('speaker_segments', [])
-            
-            # Get unique persons from the speaker segments
-            unique_persons = set()
-            for segment in speaker_segments:
-                if 'person' in segment and segment['person']:
-                    unique_persons.add(segment['person'])
-            
-            # If no persons identified, use timestamp-based Person ID as fallback
-            if not unique_persons:
-                # Check if we've already created a default person ID
-                if hasattr(self, '_default_person_id'):
-                    unique_persons = {self._default_person_id}
-                else:
-                    # Create a timestamp-based person ID
-                    current_time = int(time.time())
-                    self._default_person_id = f"Person_{current_time}"
-                    unique_persons = {self._default_person_id}
-            
-            print(f"Saving conversation data for {len(unique_persons)} recognized persons: {', '.join(unique_persons)}")
-                
-            # Create conversations directory if it doesn't exist
-            os.makedirs(self.conversations_dir, exist_ok=True)
-                
-            # Dictionary to keep track of person name mapping
-            person_id_map = {}
-                
-            # Save data for each unique person
-            for person in unique_persons:
-                # Keep timestamp-based names as they are
-                if not person.startswith("Person_") and not person.startswith("Unknown_"):
-                    # Create a timestamp-based name for any non-standard format
-                    current_time = int(time.time())
-                    new_person = f"Person_{current_time}"
-                    person_id_map[person] = new_person
-                    person = new_person
-                
-                person_dir = os.path.join(self.conversations_dir, person)
-                os.makedirs(person_dir, exist_ok=True)
-                
-                # 1. Save conversation history
-                conversation_path = os.path.join(person_dir, "conversation_history.txt")
-                
-                # Check if file exists to append or create new
-                file_mode = 'a' if os.path.exists(conversation_path) else 'w'
-                
-                with open(conversation_path, file_mode) as f:
-                    # Add timestamp if appending
-                    if file_mode == 'a':
-                        f.write(f"\n\n--- CONTINUED CONVERSATION {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                    else:
-                        f.write(f"CONVERSATION HISTORY FOR {person.upper()}\n")
-                        f.write("="*80 + "\n\n")
-                    
-                    # First add the structured speaker segments if available
-                    if speaker_segments:
-                        for segment in speaker_segments:
-                            speaker = segment.get('speaker', 'Unknown')
-                            person_name = segment.get('person', speaker)
-                            # Use mapped name if available
-                            if person_name in person_id_map:
-                                person_name = person_id_map[person_name]
-                            text = segment.get('text', '')
-                            f.write(f"[{person_name}]: {text}\n")
-                    else:
-                        # Otherwise add the raw conversation text
-                        f.write(conversation)
-                
-                # Also save as individual conversation
-                conversation_files = [f for f in os.listdir(person_dir) 
-                                   if f.startswith("conversation_") and f.endswith(".txt") and not f == "conversation_history.txt"]
-                next_number = 1
-                if conversation_files:
-                    numbers = [int(f.split("_")[1].split(".")[0]) for f in conversation_files]
-                    next_number = max(numbers) + 1
-                
-                individual_conv_path = os.path.join(person_dir, f"conversation_{next_number}.txt")
-                with open(individual_conv_path, 'w') as f:
-                    f.write(f"CONVERSATION {next_number} WITH {person.upper()}\n")
-                    f.write("="*80 + "\n\n")
-                    
-                    # Add the structured speaker segments if available
-                    if speaker_segments:
-                        for segment in speaker_segments:
-                            speaker = segment.get('speaker', 'Unknown')
-                            person_name = segment.get('person', speaker)
-                            # Use mapped name if available
-                            if person_name in person_id_map:
-                                person_name = person_id_map[person_name]
-                            text = segment.get('text', '')
-                            f.write(f"[{person_name}]: {text}\n")
-                    else:
-                        # Otherwise add the raw conversation text
-                        f.write(conversation)
-                
-                # 2. Save knowledge base if available
-                if knowledge_base:
-                    kb_path = os.path.join(person_dir, "knowledge_base.txt")
-                    
-                    # Check if file exists to append or create new
-                    kb_file_mode = 'a' if os.path.exists(kb_path) else 'w'
-                    
-                    with open(kb_path, kb_file_mode) as f:
-                        # Add timestamp if appending
-                        if kb_file_mode == 'a':
-                            f.write(f"\n\n--- UPDATED KNOWLEDGE BASE {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                        else:
-                            f.write(f"KNOWLEDGE BASE FOR {person.upper()}\n")
-                            f.write("="*80 + "\n\n")
-                        
-                        for topic, snippets in knowledge_base.items():
-                            f.write(f"TOPIC: {topic}\n")
-                            f.write("-"*80 + "\n")
-                            for i, snippet in enumerate(snippets):
-                                f.write(f"{i+1}. {snippet}\n\n")
-                            f.write("\n")
-                
-                # 3. Save topics of interest if available
-                if topics:
-                    topics_path = os.path.join(person_dir, "topics.txt")
-                    
-                    # Check if file exists to append or create new
-                    topics_file_mode = 'a' if os.path.exists(topics_path) else 'w'
-                    
-                    with open(topics_path, topics_file_mode) as f:
-                        # Add timestamp if appending
-                        if topics_file_mode == 'a':
-                            f.write(f"\n\n--- UPDATED TOPICS {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                        else:
-                            f.write(f"TOPICS OF INTEREST FOR {person.upper()}\n")
-                            f.write("="*80 + "\n\n")
-                        
-                        for topic in topics:
-                            if isinstance(topic, dict):
-                                f.write(f"• {topic.get('name', '')}: {topic.get('description', '')}\n")
-                            else:
-                                f.write(f"• {topic}\n")
-                
-                print(f"Saved data for {person} in {person_dir}")
-                
-        except Exception as e:
-            print(f"Error saving final conversation data: {e}")
-            import traceback
-            traceback.print_exc()
-    
     def migrate_to_person_format(self):
         """
         Migrate existing conversation directories to the person### format.
         Converts Person_timestamp and other formats to person001, person002, etc.
         """
-        print("\nMigrating existing conversation directories to person### format...")
-        
-        try:
-            # Ensure conversations directory exists
-            if not os.path.exists(self.conversations_dir):
-                print("No conversations directory found. Nothing to migrate.")
-                return
-            
-            # Get all directories that need migration (not already in person### format)
-            dirs_to_migrate = []
-            for item in os.listdir(self.conversations_dir):
-                item_path = os.path.join(self.conversations_dir, item)
-                if os.path.isdir(item_path) and not item.startswith("person") and item not in ["system_logs", "system_data", "temp_files"]:
-                    dirs_to_migrate.append(item)
-            
-            if not dirs_to_migrate:
-                print("No directories need migration.")
-                return
-            
-            print(f"Found {len(dirs_to_migrate)} directories to migrate")
-            
-            # Create mapping for old to new directory names
-            migration_map = {}
-            next_person_number = 1
-            
-            # First check existing person### directories to find the next available number
-            existing_person_dirs = [d for d in os.listdir(self.conversations_dir) 
-                                  if d.startswith("person") and os.path.isdir(os.path.join(self.conversations_dir, d))]
-            
-            if existing_person_dirs:
-                # Extract numbers from existing directories
-                person_numbers = []
-                for d in existing_person_dirs:
-                    try:
-                        num = int(d[6:])  # Extract number after "person"
-                        person_numbers.append(num)
-                    except ValueError:
-                        continue
-                
-                next_person_number = max(person_numbers) + 1
-            
-            # Create the mapping
-            for old_dir in dirs_to_migrate:
-                new_dir = f"person{next_person_number:03d}"
-                migration_map[old_dir] = new_dir
-                next_person_number += 1
-            
-            # Perform the migration
-            for old_dir, new_dir in migration_map.items():
-                old_path = os.path.join(self.conversations_dir, old_dir)
-                new_path = os.path.join(self.conversations_dir, new_dir)
-                
-                # Create the new directory
-                os.makedirs(new_path, exist_ok=True)
-                
-                # Copy all files
-                for item in os.listdir(old_path):
-                    old_item_path = os.path.join(old_path, item)
-                    
-                    # Handle conversation.txt -> conversation_history.txt
-                    if item == "conversation.txt":
-                        new_item_path = os.path.join(new_path, "conversation_history.txt")
-                    else:
-                        new_item_path = os.path.join(new_path, item)
-                    
-                    # Special handling for text files to update person names
-                    if item.endswith(".txt"):
-                        with open(old_item_path, 'r', encoding='utf-8', errors='ignore') as src:
-                            try:
-                                content = src.read()
-                                # Replace old person name with new one in content
-                                content = content.replace(old_dir.upper(), new_dir.upper())
-                                
-                                with open(new_item_path, 'w', encoding='utf-8') as dst:
-                                    dst.write(content)
-                            except Exception as e:
-                                print(f"Error processing file {old_item_path}: {e}")
-                                # Fallback to binary copy if text processing fails
-                                with open(old_item_path, 'rb') as src, open(new_item_path, 'wb') as dst:
-                                    dst.write(src.read())
-                    else:
-                        # For non-text files, just copy them
-                        with open(old_item_path, 'rb') as src, open(new_item_path, 'wb') as dst:
-                            dst.write(src.read())
-                
-                print(f"Migrated {old_dir} to {new_dir}")
-                
-                # Optionally remove the old directory after successful migration
-                # import shutil
-                # shutil.rmtree(old_path)
-            
-            print("Migration completed successfully")
-            
-        except Exception as e:
-            print(f"Error during migration: {e}")
-            import traceback
-            traceback.print_exc()
+        # This method is being completely removed as it migrates Person_{number} directories
+        pass
     
     def _should_continue_conversation(self, person_name, max_time_gap=3600):
         """
@@ -1170,26 +905,5 @@ class ConversationAssistant:
         Returns:
             bool: True if we should continue the existing conversation
         """
-        try:
-            person_dir = os.path.join(self.conversations_dir, person_name)
-            if not os.path.exists(person_dir):
-                return False
-            
-            # Check the last modified time of the conversation history
-            history_path = os.path.join(person_dir, "conversation_history.txt")
-            if not os.path.exists(history_path):
-                return False
-            
-            last_modified = os.path.getmtime(history_path)
-            current_time = time.time()
-            
-            # If the last conversation was recent, continue it
-            if current_time - last_modified < max_time_gap:
-                print(f"Continuing conversation with {person_name} (last activity: {int((current_time - last_modified) / 60)} minutes ago)")
-                return True
-            else:
-                print(f"Starting new conversation with {person_name} (last activity: {int((current_time - last_modified) / 3600)} hours ago)")
-                return False
-        except Exception as e:
-            print(f"Error checking conversation continuity: {e}")
-            return False 
+        # This method is being completely removed as it checks Person_{number} directories
+        pass 

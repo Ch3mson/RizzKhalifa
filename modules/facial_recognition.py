@@ -18,6 +18,52 @@ from modules.config import SAMPLE_RATE
 # Global variable for face recheck interval (in seconds)
 FACE_RECHECK_INTERVAL = 300  # Default: check every 5 minutes
 
+class ImprovedFaceAnalysis(FaceAnalysis):
+    """
+    Extension of InsightFace's FaceAnalysis that offers improved face detection capabilities.
+    This class provides better handling of detection sizes and implements adaptive detection.
+    """
+    
+    def get_with_multiple_sizes(self, img, max_num=0, sizes=None):
+        """
+        Attempts to detect faces using multiple detection sizes.
+        
+        Args:
+            img: Input image
+            max_num: Maximum number of faces to detect (0 for all)
+            sizes: List of detection sizes to try [(width, height)]
+            
+        Returns:
+            List of detected faces
+        """
+        if sizes is None:
+            sizes = [(640, 640), (320, 320), (480, 480), (720, 720), (960, 960)]
+        
+        print(f"Trying to detect faces with multiple detection sizes: {sizes}")
+        faces = None
+        
+        for det_size in sizes:
+            try:
+                # Set detection size for this attempt
+                if hasattr(self.det_model, "input_size"):
+                    self.det_model.input_size = det_size
+                
+                # Try detection with current size
+                faces = self.get(img, max_num)
+                if faces and len(faces) > 0:
+                    print(f"Successfully detected {len(faces)} faces with detection size {det_size}")
+                    return faces
+            except Exception as e:
+                print(f"Error with detection size {det_size}: {e}")
+                continue
+        
+        # If no faces found with any size, return empty list
+        if not faces or len(faces) == 0:
+            print("No faces detected with any detection size")
+            return []
+        
+        return faces
+
 class FacialRecognitionModule:
     """
     Module for facial recognition that works alongside speaker diarization.
@@ -27,7 +73,7 @@ class FacialRecognitionModule:
     """
     
     def __init__(self, 
-                recognition_threshold: float = 0.4,
+                recognition_threshold: float = 0.5, 
                 face_db_path: str = None,
                 model_name: str = 'buffalo_l'):
         """
@@ -43,14 +89,22 @@ class FacialRecognitionModule:
         
         # Set recognition threshold
         self.recognition_threshold = recognition_threshold
+        print(f"Using face recognition threshold: {self.recognition_threshold}")
         
         # Initialize InsightFace
         try:
-            self.app = FaceAnalysis(name=model_name)
+            print(f"Initializing InsightFace with model: {model_name}")
+            # Use recommended providers with fallback to CPU
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            # Use our improved face analysis class
+            self.app = ImprovedFaceAnalysis(name=model_name, providers=providers)
+            # Don't prepare yet - we'll prepare with different detection sizes as needed
             self.app.prepare(ctx_id=0, det_size=(640, 640))
             self.logger.info(f"Initialized InsightFace with model {model_name}")
+            print(f"Successfully initialized InsightFace model: {model_name}")
         except Exception as e:
             self.logger.error(f"Error initializing InsightFace: {e}")
+            print(f"Error initializing InsightFace: {e}")
             raise
         
         # Get project directory
@@ -614,8 +668,7 @@ class FacialRecognitionModule:
                                     conversation_data: Dict,
                                     base_dir: str = None) -> bool:
         """
-        Save conversation data for a specific person.
-        Uses face images instead of pickle files for face data.
+        This method has been deactivated since we no longer save to Person directories.
         
         Args:
             person_name: Name of the person
@@ -623,146 +676,10 @@ class FacialRecognitionModule:
             base_dir: Base directory to save conversations
             
         Returns:
-            bool: True if saved successfully
+            bool: Always returns True (but doesn't actually save anything)
         """
-        try:
-            # Set up directory in the current project folder
-            base_dir = base_dir or os.path.join(os.getcwd(), "conversations")
-            
-            # Ensure we're using a timestamp-based name
-            if not person_name.startswith("Person_") and not person_name.startswith("Unknown_"):
-                if not hasattr(self, '_session_timestamp'):
-                    self._session_timestamp = int(time.time())
-                person_name = f"Person_{self._session_timestamp}"
-            
-            # Create or get person directory
-            person_dir = os.path.join(base_dir, person_name)
-            os.makedirs(person_dir, exist_ok=True)
-            
-            # If we have a face image in the conversation data, save it
-            if 'face_image' in conversation_data and conversation_data['face_image'] is not None:
-                self._save_face_image(person_name, conversation_data['face_image'])
-            
-            # Get the next conversation number
-            conversation_files = [f for f in os.listdir(person_dir) 
-                               if f.startswith("conversation_") and f.endswith(".txt") and not f == "conversation_history.txt"]
-            next_number = 1
-            if conversation_files:
-                numbers = [int(f.split("_")[1].split(".")[0]) for f in conversation_files]
-                next_number = max(numbers) + 1
-            
-            # Save new conversation with incremented number
-            conversation_path = os.path.join(person_dir, f"conversation_{next_number}.txt")
-            with open(conversation_path, 'w') as f:
-                f.write(f"CONVERSATION {next_number} WITH {person_name.upper()}\n")
-                f.write("="*80 + "\n\n")
-                
-                # Get full text from segments for easy reading
-                segments = conversation_data.get("segments", [])
-                if segments:
-                    for segment in segments:
-                        speaker = segment.get("speaker", "Unknown")
-                        person = segment.get("person", speaker)
-                        text = segment.get("text", "")
-                        f.write(f"[{person}]: {text}\n")
-                elif "text" in conversation_data:
-                    # If we have just raw text without segments
-                    f.write(conversation_data.get("text", ""))
-            
-            # Update conversation history
-            history_path = os.path.join(person_dir, "conversation_history.txt")
-            history_exists = os.path.exists(history_path)
-            
-            with open(history_path, 'a' if history_exists else 'w') as f:
-                if not history_exists:
-                    f.write(f"CONVERSATION HISTORY FOR {person_name.upper()}\n")
-                    f.write("="*80 + "\n\n")
-                else:
-                    f.write(f"\n\n--- NEW CONVERSATION {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                
-                # Add the conversation content
-                segments = conversation_data.get("segments", [])
-                if segments:
-                    for segment in segments:
-                        speaker = segment.get("speaker", "Unknown")
-                        person = segment.get("person", speaker)
-                        text = segment.get("text", "")
-                        f.write(f"[{person}]: {text}\n")
-                elif "text" in conversation_data:
-                    f.write(conversation_data.get("text", ""))
-            
-            # Extend knowledge base if provided
-            if "knowledge_base" in conversation_data and conversation_data["knowledge_base"]:
-                kb_path = os.path.join(person_dir, "knowledge_base.txt")
-                kb_exists = os.path.exists(kb_path)
-                
-                with open(kb_path, 'a' if kb_exists else 'w') as f:
-                    if not kb_exists:
-                        f.write(f"KNOWLEDGE BASE FOR {person_name.upper()}\n")
-                        f.write("="*80 + "\n\n")
-                    else:
-                        f.write(f"\n\n--- UPDATED KNOWLEDGE BASE {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                    
-                    for topic, snippets in conversation_data["knowledge_base"].items():
-                        f.write(f"TOPIC: {topic}\n")
-                        f.write("-"*80 + "\n")
-                        for i, snippet in enumerate(snippets):
-                            f.write(f"{i+1}. {snippet}\n\n")
-                        f.write("\n")
-            
-            # Extend topics if available
-            if "workflow_state" in conversation_data:
-                state = conversation_data.get("workflow_state", {})
-                if "topics" in state:
-                    topics = state.get("topics", [])
-                    if topics:
-                        topics_path = os.path.join(person_dir, "topics.txt")
-                        topics_exists = os.path.exists(topics_path)
-                        
-                        with open(topics_path, 'a' if topics_exists else 'w') as f:
-                            if not topics_exists:
-                                f.write(f"TOPICS FOR {person_name.upper()}\n")
-                                f.write("="*80 + "\n\n")
-                            else:
-                                f.write(f"\n\n--- UPDATED TOPICS {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n\n")
-                            
-                            # Organize topics by category
-                            categorized_topics = {
-                                "Likes": [],
-                                "Dislikes": [],
-                                "School": [],
-                                "Hobbies": [],
-                                "Professional": [],
-                                "Skills": []
-                            }
-                            
-                            # Sort topics into categories
-                            for topic in topics:
-                                if isinstance(topic, dict):
-                                    category = topic.get("category", "")
-                                    if category in categorized_topics:
-                                        categorized_topics[category].append({
-                                            "name": topic.get("name", ""),
-                                            "description": topic.get("description", "")
-                                        })
-                            
-                            # Write topics by category
-                            for category, items in categorized_topics.items():
-                                if items:  # Only write categories that have items
-                                    f.write(f"{category.upper()}:\n")
-                                    f.write("-"*40 + "\n")
-                                    for item in items:
-                                        f.write(f"• {item['name']}: {item['description']}\n")
-                                    f.write("\n")
-            
-            self.logger.info(f"Successfully saved data for {person_name} with incremental conversation numbering")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error saving conversation: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+        self.logger.info("save_conversation_for_person is deactivated - no longer saving to Person directories")
+        return True
     
     def capture_from_webcam(self, name: str, duration: int = 5) -> bool:
         """
@@ -1378,193 +1295,244 @@ class FacialRecognitionModule:
 
     def merge_person_folders(self, source_id: str, target_id: str) -> bool:
         """
-        Merge two person folders, moving all content from source to target.
-        Also updates the identity mappings.
-        
-        Args:
-            source_id: Source person ID (e.g., "Person_1742069504")
-            target_id: Target person ID (e.g., "Person_1742069534")
-            
-        Returns:
-            bool: True if merged successfully
+        This method has been deactivated since we no longer use Person directories.
         """
-        try:
-            base_dir = os.path.join(os.getcwd(), "conversations")
-            source_dir = os.path.join(base_dir, source_id)
-            target_dir = os.path.join(base_dir, target_id)
-            
-            # Check if both directories exist
-            if not os.path.exists(source_dir):
-                self.logger.error(f"Source directory {source_dir} does not exist")
-                return False
-            
-            if not os.path.exists(target_dir):
-                self.logger.error(f"Target directory {target_dir} does not exist")
-                return False
-            
-            # Create identity mapping
-            if not hasattr(self, 'identity_mappings'):
-                self.identity_mappings = {}
-            
-            # Add mapping from source to target
-            self.identity_mappings[source_id] = target_id
-            self._save_identity_mappings()
-            
-            # Move all files from source to target
-            for item in os.listdir(source_dir):
-                source_path = os.path.join(source_dir, item)
-                target_path = os.path.join(target_dir, item)
-                
-                # Handle conversation files specially
-                if item.startswith("conversation_") and item.endswith(".txt"):
-                    # Find the next conversation number in target
-                    conv_files = [f for f in os.listdir(target_dir) 
-                               if f.startswith("conversation_") and f.endswith(".txt") 
-                               and not f == "conversation_history.txt"]
-                    next_number = 1
-                    if conv_files:
-                        numbers = [int(f.split("_")[1].split(".")[0]) for f in conv_files]
-                        next_number = max(numbers) + 1
-                    
-                    # Copy with new number
-                    new_target_path = os.path.join(target_dir, f"conversation_{next_number}.txt")
-                    with open(source_path, 'r') as src, open(new_target_path, 'w') as dst:
-                        content = src.read()
-                        # Replace source ID with target ID
-                        content = content.replace(source_id.upper(), target_id.upper())
-                        dst.write(content)
-                    
-                    # Also append to conversation history
-                    history_path = os.path.join(target_dir, "conversation_history.txt")
-                    with open(history_path, 'a') as f:
-                        f.write(f"\n\n--- MERGED FROM {source_id} ---\n\n")
-                        with open(source_path, 'r') as src:
-                            lines = src.readlines()
-                            if len(lines) > 3:  # Skip title and separator
-                                f.writelines(lines[3:])
-                
-                # Handle face images
-                elif item.startswith("face_") and item.endswith(".jpg"):
-                    # Copy face images with original names
-                    import shutil
-                    shutil.copy2(source_path, target_path)
-                
-                # Handle other files
-                elif item not in ["face.jpg"]:  # Skip main face.jpg as target has its own
-                    # For other files like knowledge_base.txt, merge content
-                    if os.path.exists(target_path) and item.endswith(".txt"):
-                        with open(target_path, 'a') as f:
-                            f.write(f"\n\n--- MERGED FROM {source_id} ---\n\n")
-                            with open(source_path, 'r') as src:
-                                f.write(src.read())
-                    else:
-                        # Just copy the file
-                        import shutil
-                        shutil.copy2(source_path, target_path)
-            
-            # Update known_faces to point to target_id
-            if source_id in self.known_faces:
-                if target_id not in self.known_faces:
-                    self.known_faces[target_id] = self.known_faces[source_id]
-                del self.known_faces[source_id]
-                self._save_face_db()
-            
-            # Update face galleries
-            if hasattr(self, 'face_galleries') and source_id in self.face_galleries:
-                if target_id not in self.face_galleries:
-                    self.face_galleries[target_id] = []
-                self.face_galleries[target_id].extend(self.face_galleries[source_id])
-                del self.face_galleries[source_id]
-            
-            self.logger.info(f"Successfully merged {source_id} into {target_id}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error merging person folders: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+        self.logger.info("merge_person_folders is deactivated - no longer using Person directories")
+        return True
 
     def find_existing_person_folder(self, face_image: np.ndarray) -> str:
         """
-        Try to find an existing person folder that matches the current face.
+        This method has been deactivated since we no longer use Person directories.
+        """
+        self.logger.info("find_existing_person_folder is deactivated - no longer using Person directories")
+        return None
+
+    def _save_debug_face_image(self, frame: np.ndarray, faces: list, prefix: str = "debug") -> str:
+        """
+        Draws bounding boxes around detected faces and saves the image for debugging.
         
         Args:
-            face_image: Current face image
+            frame: The original frame
+            faces: List of detected faces from InsightFace
+            prefix: Prefix for the debug image filename
             
         Returns:
-            str: Person folder name if found, None otherwise
+            str: Path to the saved debug image
         """
         try:
-            # Detect and get face embedding
-            faces = self.app.get(face_image)
-            if not faces:
-                return None
+            # Create a copy of the frame to draw on
+            debug_img = frame.copy()
             
-            # Use the largest face
-            if len(faces) > 1:
-                faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
+            # Draw bounding boxes and confidence scores for each face
+            for i, face in enumerate(faces):
+                bbox = face.bbox.astype(int)
+                # Draw bounding box (rectangle)
+                cv2.rectangle(debug_img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+                
+                # Put confidence score text
+                confidence = f"Score: {face.det_score:.4f}"
+                cv2.putText(debug_img, confidence, (bbox[0], bbox[1] - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
+                # Draw landmark points if available
+                if hasattr(face, 'kps') and face.kps is not None:
+                    for kp in face.kps:
+                        kx, ky = kp
+                        cv2.circle(debug_img, (int(kx), int(ky)), 2, (255, 0, 0), 2)
             
-            face_embedding = faces[0].normed_embedding
+            # Save the debug image
+            debug_dir = os.path.join(os.getcwd(), "temp_files", "debug")
+            os.makedirs(debug_dir, exist_ok=True)
             
-            # Try to match against all known faces with a lower threshold
-            best_match = None
-            best_similarity = 0.0
+            debug_path = os.path.join(debug_dir, f"{prefix}_faces_{int(time.time())}.jpg")
+            cv2.imwrite(debug_path, debug_img)
             
-            # First check against all known faces
-            for name, known_embedding in self.known_faces.items():
-                similarity = np.dot(face_embedding, known_embedding)
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_match = name
-            
-            # Then check against all face galleries
-            if hasattr(self, 'face_galleries') and self.face_galleries:
-                for name, gallery in self.face_galleries.items():
-                    if not gallery:
-                        continue
-                    
-                    # Calculate similarity with each face in the gallery
-                    gallery_similarities = [np.dot(face_embedding, gallery_face) for gallery_face in gallery]
-                    
-                    # Use the highest similarity from the gallery
-                    gallery_best = max(gallery_similarities)
-                    
-                    # If gallery match is better, use it
-                    if gallery_best > best_similarity:
-                        best_similarity = gallery_best
-                        best_match = name
-            
-            # Use a lower threshold for finding existing folders (0.08 instead of 0.15)
-            if best_similarity >= 0.08 and best_match:
-                self.logger.info(f"Found existing person folder: {best_match} with similarity {best_similarity:.2f}")
-                return best_match
-            
-            return None
+            print(f"Saved debug face image with {len(faces)} detected faces to: {debug_path}")
+            return debug_path
         except Exception as e:
-            self.logger.error(f"Error finding existing person folder: {e}")
+            print(f"Error saving debug face image: {e}")
             return None
+    
+    def manage_face_recognition(self, frame: np.ndarray) -> Tuple[str, bool]:
+        """
+        Main entry point for the new face recognition flow:
+        1. Takes a single frame containing a face
+        2. Saves it to a temporary file
+        3. Compares it with existing faces in conversations/faces/
+        4. If there's a match, returns the identifier and deletes the temp file
+        5. If no match or no existing faces, adds the face with a unique identifier
+        
+        Args:
+            frame: The captured frame containing a face
+            
+        Returns:
+            Tuple of (face_identifier, is_new_face)
+        """
+        # Create the faces directory if it doesn't exist
+        faces_dir = os.path.join(os.getcwd(), "conversations", "faces")
+        os.makedirs(faces_dir, exist_ok=True)
+        
+        print("Starting face detection using InsightFace...")
+        print(f"Current recognition threshold: {self.recognition_threshold}")
+        
+        # Use our improved face detection method
+        faces = self.app.get_with_multiple_sizes(frame)
+        
+        if not faces or len(faces) == 0:
+            print("No face detected in the frame after trying multiple detection sizes")
+            return None, False
+        
+        # Save a debug image showing all detected faces
+        self._save_debug_face_image(frame, faces, "input")
+        
+        # Get the largest face in the frame (usually the most prominent)
+        largest_face = max(faces, key=lambda x: x.bbox[2] * x.bbox[3])
+        face_embedding = largest_face.embedding
+        
+        print(f"Face detected with confidence: {largest_face.det_score:.4f}")
+        
+        # Create a temporary file path
+        temp_dir = os.path.join(os.getcwd(), "temp_files")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file_path = os.path.join(temp_dir, f"temp_face_{int(time.time())}.jpg")
+        
+        # Save the face to the temporary file with margin
+        bbox = largest_face.bbox.astype(int)
+        margin = 50  # Add margin around the face
+        x1 = max(0, bbox[0] - margin)
+        y1 = max(0, bbox[1] - margin)
+        x2 = min(frame.shape[1], bbox[2] + margin)
+        y2 = min(frame.shape[0], bbox[3] + margin)
+        face_img = frame[y1:y2, x1:x2]
+        cv2.imwrite(temp_file_path, face_img)
+        
+        print(f"Saved temporary face image to: {temp_file_path}")
+        
+        # Check if there are any existing faces
+        existing_faces = [f for f in os.listdir(faces_dir) if f.startswith("face_") and f.endswith(".jpg")]
+        
+        if not existing_faces:
+            print("No existing faces found in directory. Adding this face as the first one.")
+            # No existing faces, add this as the first one
+            face_id = f"face_{int(time.time())}"
+            permanent_path = os.path.join(faces_dir, f"{face_id}.jpg")
+            os.rename(temp_file_path, permanent_path)
+            print(f"Nothing found adding temp file as: {face_id}")
+            self.logger.info(f"Added first face with ID: {face_id}")
+            return face_id, True
+        
+        print(f"Found {len(existing_faces)} existing faces. Checking for matches...")
+        print(f"Using recognition threshold: {self.recognition_threshold}")
+        
+        # Compare with existing faces
+        best_match = None
+        best_similarity = 0
+        all_similarities = []
+        
+        for face_file in existing_faces:
+            face_path = os.path.join(faces_dir, face_file)
+            try:
+                print(f"Comparing with existing face: {face_file}")
+                # Load the image and extract face embedding
+                img = cv2.imread(face_path)
+                if img is None:
+                    print(f"Failed to load image: {face_path}")
+                    continue
+                    
+                # Use our improved face detection with multiple sizes
+                faces_in_img = self.app.get_with_multiple_sizes(img)
+                
+                if not faces_in_img or len(faces_in_img) == 0:
+                    print(f"No face detected in {face_file}")
+                    continue
+                
+                # Save debug image for this comparison
+                self._save_debug_face_image(img, faces_in_img, f"compare_{face_file.split('.')[0]}")
+                
+                existing_embedding = faces_in_img[0].embedding
+                # Calculate cosine similarity
+                similarity = self._calculate_similarity(face_embedding, existing_embedding)
+                all_similarities.append((face_file, similarity))
+                
+                print(f"Similarity with {face_file}: {similarity:.4f} (threshold: {self.recognition_threshold})")
+                
+                if similarity > self.recognition_threshold and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = face_file.split(".")[0]  # Remove extension
+                    print(f"New best match: {best_match} with similarity: {best_similarity:.4f}")
+            except Exception as e:
+                        print(f"Error processing face file {face_file}: {e}")
+        
+        # Print summary of all similarities
+        print("\nSIMILARITY SUMMARY:")
+        for face_file, similarity in sorted(all_similarities, key=lambda x: x[1], reverse=True):
+            match_indicator = "✓" if similarity > self.recognition_threshold else "✗"
+            print(f"{match_indicator} {face_file}: {similarity:.4f}")
+        print("")
+        
+        if best_match:
+            # Found a match, delete the temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            print(f"Found matching face: {best_match} (similarity: {best_similarity:.4f})")
+            print(f"Found matching face deleting temp and not doing anything")
+            self.logger.info(f"Matched existing face: {best_match} (similarity: {best_similarity:.4f})")
+            return best_match, False
+        else:
+            # No match found, add as a new face
+            face_id = f"face_{int(time.time())}"
+            permanent_path = os.path.join(faces_dir, f"{face_id}.jpg")
+            os.rename(temp_file_path, permanent_path)
+            print(f"No matching face found adding new face with ID: {face_id}")
+            self.logger.info(f"Added new face with ID: {face_id}")
+            return face_id, True
+    
+    def _calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        """
+        Calculate cosine similarity between two face embeddings
+        
+        Args:
+            embedding1: First face embedding
+            embedding2: Second face embedding
+            
+        Returns:
+            Cosine similarity score (0-1)
+        """
+        try:
+            # Check for None values
+            if embedding1 is None or embedding2 is None:
+                print("Warning: Received None embedding in similarity calculation")
+                return 0
+                
+            # Check for NaN values
+            if np.isnan(embedding1).any() or np.isnan(embedding2).any():
+                print("Warning: NaN values in embeddings")
+                return 0
+                
+            # Basic cosine similarity calculation
+            # Normalize vectors explicitly to ensure correct calculation
+            norm1 = np.linalg.norm(embedding1)
+            norm2 = np.linalg.norm(embedding2)
+            
+            if norm1 == 0 or norm2 == 0:
+                print("Warning: Zero norm detected in embeddings")
+                return 0
+                
+            # Calculate cosine similarity
+            similarity = np.dot(embedding1, embedding2) / (norm1 * norm2)
+            
+            # Ensure score is in range [0,1]
+            similarity = float(max(0, min(1, similarity)))
+            
+            return similarity
+        except Exception as e:
+            print(f"Error calculating similarity: {e}")
+            return 0
 
 def merge_person_folders_cli():
     """Command-line interface to merge person folders."""
-    import argparse
-    from modules.facial_recognition import FacialRecognition
-    
-    parser = argparse.ArgumentParser(description='Merge person folders')
-    parser.add_argument('source', help='Source person ID (e.g., Person_1742069504)')
-    parser.add_argument('target', help='Target person ID (e.g., Person_1742069534)')
-    args = parser.parse_args()
-    
-    # Initialize facial recognition
-    fr = FacialRecognition()
-    
-    # Merge folders
-    success = fr.merge_person_folders(args.source, args.target)
-    
-    if success:
-        print(f"Successfully merged {args.source} into {args.target}")
-    else:
-        print(f"Failed to merge {args.source} into {args.target}")
+    print("This functionality has been deactivated since we no longer use Person directories.")
+    return
 
 if __name__ == "__main__":
     merge_person_folders_cli()
