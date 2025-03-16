@@ -1461,7 +1461,7 @@ class FacialRecognitionModule:
                     best_match = face_file.split(".")[0]  # Remove extension
                     print(f"New best match: {best_match} with similarity: {best_similarity:.4f}")
             except Exception as e:
-                        print(f"Error processing face file {face_file}: {e}")
+                            print(f"Error processing face file {face_file}: {e}")
         
         # Print summary of all similarities
         print("\nSIMILARITY SUMMARY:")

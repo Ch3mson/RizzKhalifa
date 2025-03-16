@@ -37,89 +37,211 @@ if supabase_url and supabase_key:
         print(f"Error initializing Supabase client: {e}")
         supabase_client = None
 
+def clean_supabase_duplicates():
+    """
+    Clean up any duplicate entries in the user-history table.
+    Each user_id should have only one entry.
+    """
+    if not supabase_client:
+        print("Supabase client not initialized. Cannot clean up duplicates.")
+        return
+    
+    try:
+        print("Checking for duplicate entries in user-history table...")
+        
+        # Get all user IDs from the user-history table
+        all_entries = (
+            supabase_client.table("user-history")
+            .select("id, user_id, created_at")
+            .order("created_at")
+            .execute()
+        )
+        
+        if not all_entries.data:
+            print("No entries found in user-history table.")
+            return
+        
+        # Group entries by user_id
+        user_entries = {}
+        for entry in all_entries.data:
+            user_id = entry.get("user_id")
+            if user_id not in user_entries:
+                user_entries[user_id] = []
+            user_entries[user_id].append(entry)
+        
+        # Find users with multiple entries
+        duplicates_found = 0
+        for user_id, entries in user_entries.items():
+            if len(entries) > 1:
+                duplicates_found += len(entries) - 1
+                print(f"Found {len(entries)} entries for user ID: {user_id}")
+                
+                # Keep the first entry (oldest), delete the rest
+                # Sort by created_at to ensure we keep the oldest
+                entries.sort(key=lambda x: x.get("created_at", ""))
+                
+                # Keep track of all personal_info and profile_pic from all entries
+                # so we can merge them into the kept entry
+                all_personal_info = []
+                profile_pic = None
+                
+                # Get all data from entries we'll delete
+                for i, entry in enumerate(entries):
+                    if i > 0:  # Skip the first entry, which we'll keep
+                        # Get the full entry data
+                        full_entry = (
+                            supabase_client.table("user-history")
+                            .select("*")
+                            .eq("id", entry["id"])
+                            .execute()
+                        )
+                        
+                        if full_entry.data:
+                            entry_data = full_entry.data[0]
+                            # Collect personal info
+                            if entry_data.get("personal_info"):
+                                all_personal_info.extend(entry_data["personal_info"])
+                            # Get profile pic if it exists
+                            if entry_data.get("profile_pic") and not profile_pic:
+                                profile_pic = entry_data["profile_pic"]
+                        
+                        # Delete the duplicate entry
+                        delete_response = (
+                            supabase_client.table("user-history")
+                            .delete()
+                            .eq("id", entry["id"])
+                            .execute()
+                        )
+                        print(f"Deleted duplicate entry with ID: {entry['id']}")
+                
+                # Update the kept entry with merged data if we have any
+                if all_personal_info or profile_pic:
+                    kept_entry = entries[0]
+                    
+                    # Get the full entry data for the kept entry
+                    full_kept_entry = (
+                        supabase_client.table("user-history")
+                        .select("*")
+                        .eq("id", kept_entry["id"])
+                        .execute()
+                    )
+                    
+                    if full_kept_entry.data:
+                        kept_data = full_kept_entry.data[0]
+                        update_data = {}
+                        
+                        # Merge personal info
+                        if all_personal_info:
+                            existing_personal_info = kept_data.get("personal_info", [])
+                            # Add new items while avoiding duplicates
+                            for item in all_personal_info:
+                                if item not in existing_personal_info:
+                                    existing_personal_info.append(item)
+                            update_data["personal_info"] = existing_personal_info
+                        
+                        # Use profile pic if the kept entry doesn't have one
+                        if profile_pic and not kept_data.get("profile_pic"):
+                            update_data["profile_pic"] = profile_pic
+                        
+                        if update_data:
+                            update_data["updated_at"] = time.strftime('%Y-%m-%d %H:%M:%S')
+                            update_response = (
+                                supabase_client.table("user-history")
+                                .update(update_data)
+                                .eq("id", kept_entry["id"])
+                                .execute()
+                            )
+                            print(f"Updated kept entry with merged data for user ID: {user_id}")
+        
+        if duplicates_found > 0:
+            print(f"Cleaned up {duplicates_found} duplicate entries from user-history table")
+        else:
+            print("No duplicate entries found in user-history table")
+            
+    except Exception as e:
+        print(f"Error cleaning up duplicates: {e}")
+        traceback.print_exc()
+
 def upload_face_to_supabase(face_path, user_id):
     """
-    Upload a face image to Supabase and create an entry in the user-history bucket.
+    Upload a face image to Supabase and create an entry in the user-history bucket
+    Ensures that only one entry per user_id exists in the user-history table
     
     Args:
         face_path: Path to the face image file
-        user_id: The numeric ID of the user extracted from the filename
-        
+        user_id: Numeric ID of the user
+    
     Returns:
         bool: True if upload was successful, False otherwise
     """
     if not supabase_client:
-        print("Supabase client not initialized. Cannot upload face image.")
+        print("Supabase client not initialized. Cannot upload face.")
         return False
     
     try:
-        # Get the filename without path
-        filename = os.path.basename(face_path)
+        # Upload face image to avatars bucket
+        file_name = os.path.basename(face_path)
+        avatar_path = f"faces/{file_name}"
         
-        # Define the path in the avatars bucket
-        avatar_path = f"faces/{filename}"
-        
-        print(f"Uploading face image {filename} to Supabase avatars bucket...")
-        
-        # Upload the image file to the avatars bucket
         with open(face_path, "rb") as f:
-            upload_response = (
-                supabase_client.storage
-                .from_("avatars")  # Bucket name for face images
-                .upload(
-                    file=f,
-                    path=avatar_path,
-                    file_options={"cache-control": "3600", "upsert": "true"}
-                )
-            )
-        
-        print(f"Face image uploaded to Supabase: {avatar_path}")
-        
-        # First check if a record with this user_id already exists
-        # Use the delete/insert pattern to ensure we never have duplicates
-        try:
-            # Get existing entries for this user_id
-            existing_data = (
-                supabase_client.table("user-history")
-                .select("id")
-                .eq("user_id", user_id)
-                .execute()
-            )
+            file_content = f.read()
             
-            # If entries exist, delete them first
-            if existing_data.data and len(existing_data.data) > 0:
-                print(f"Found {len(existing_data.data)} existing entries for user ID: {user_id}, removing duplicates")
-                for entry in existing_data.data:
-                    delete_response = (
-                        supabase_client.table("user-history")
-                        .delete()
-                        .eq("id", entry["id"])
-                        .execute()
-                    )
-        except Exception as e:
-            print(f"Error checking/cleaning existing entries: {e}")
-            # Continue with insertion - we'll ensure uniqueness by user_id
+        # Upload to avatars bucket
+        bucket_response = supabase_client.storage.from_("avatars").upload(
+            path=avatar_path,
+            file=file_content,
+            file_options={"content-type": "image/jpeg"},
+        )
         
-        # Now insert a single new record
-        try:
+        print(f"Uploaded face image to Supabase: {avatar_path}")
+        
+        # Check if an entry already exists for this user_id
+        existing_data = (
+            supabase_client.table("user-history")
+            .select("id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        # If multiple entries exist, delete all but keep most complete one
+        if existing_data.data and len(existing_data.data) > 1:
+            print(f"Found {len(existing_data.data)} duplicate entries for user ID: {user_id}, cleaning up...")
+            # Delete all entries for this user_id (we'll create a fresh one)
+            for entry in existing_data.data:
+                delete_response = (
+                    supabase_client.table("user-history")
+                    .delete()
+                    .eq("id", entry["id"])
+                    .execute()
+                )
+            existing_data.data = []
+            
+        # Create a new entry or update existing entry
+        if not existing_data.data or len(existing_data.data) == 0:
+            # Create new entry
             db_response = (
                 supabase_client.table("user-history")
                 .insert({
                     "user_id": user_id,
-                    "personal_info": [],  # Empty for new images
-                    "profile_pic": avatar_path,
-                    "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                    "personal_info": [],
+                    "profile_pic": avatar_path
                 })
                 .execute()
             )
-            print(f"Created user-history entry for user ID: {user_id}")
-        except Exception as e:
-            print(f"Error creating user-history entry: {e}")
-            traceback.print_exc()
-            return False
-        
+            print(f"Created new user-history entry for user ID: {user_id}")
+        else:
+            # Update existing entry
+            db_response = (
+                supabase_client.table("user-history")
+                .update({
+                    "profile_pic": avatar_path
+                })
+                .eq("id", existing_data.data[0]["id"])
+                .execute()
+            )
+            print(f"Updated existing user-history entry for user ID: {user_id}")
+            
         return True
-        
     except Exception as e:
         print(f"Error uploading face to Supabase: {e}")
         traceback.print_exc()
@@ -174,8 +296,7 @@ def update_personal_info_in_supabase(user_id, personal_info):
             db_response = (
                 supabase_client.table("user-history")
                 .update({
-                    "personal_info": personal_info,
-                    "updated_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                    "personal_info": personal_info
                 })
                 .eq("id", existing_data.data[0]["id"])  # Use ID instead of user_id for more precise targeting
                 .execute()
@@ -189,8 +310,7 @@ def update_personal_info_in_supabase(user_id, personal_info):
                 supabase_client.table("user-history")
                 .insert({
                     "user_id": user_id,
-                    "personal_info": personal_info,
-                    "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                    "personal_info": personal_info
                 })
                 .execute()
             )
@@ -202,6 +322,124 @@ def update_personal_info_in_supabase(user_id, personal_info):
             return False
     except Exception as e:
         print(f"Error updating personal info in Supabase: {e}")
+        traceback.print_exc()
+        return False
+
+def update_chat_history_in_supabase(user_id, chat_history_file):
+    """
+    Update the chat history for a user in the Supabase database.
+    For each run, we create ONE entry in the chat-history table and update that same entry
+    as the conversation progresses.
+    
+    Args:
+        user_id: The numeric ID of the user
+        chat_history_file: Path to the JSON file containing chat history
+        
+    Returns:
+        bool: True if update was successful, False otherwise
+    """
+    if not supabase_client:
+        print("Supabase client not initialized. Cannot update chat history.")
+        return False
+    
+    try:
+        # Extract the run timestamp from the filename (format: chat_history_TIMESTAMP.json)
+        # We'll use this to identify which entry to update in Supabase
+        filename = os.path.basename(chat_history_file)
+        run_timestamp = ""
+        if filename.startswith("chat_history_") and filename.endswith(".json"):
+            run_timestamp = filename[13:-5]  # Remove "chat_history_" prefix and ".json" suffix
+        else:
+            run_timestamp = time.strftime('%Y%m%d_%H%M%S')  # Use current time if filename doesn't match pattern
+        
+        # Current date for filtering
+        current_date = time.strftime('%Y-%m-%d')
+        
+        # Read the chat history from the file
+        with open(chat_history_file, 'r') as f:
+            chat_data = json.load(f)
+        
+        # Get all chat history entries for this user
+        existing_entries = (
+            supabase_client.table("chat-history")
+            .select("id, created_at, chat_history")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        # Create wrapped chat data that includes metadata
+        wrapped_chat_data = {
+            "metadata": {
+                "run_id": run_timestamp,
+                "updated_at": time.strftime('%Y-%m-%d %H:%M:%S')
+            },
+            "messages": chat_data  # Store the actual messages as a nested object
+        }
+        
+        # Try to find matching entry for this run by examining the chat_history content
+        matching_entry = None
+        if existing_entries.data:
+            for entry in existing_entries.data:
+                entry_chat = entry.get("chat_history", {})
+                
+                # Check if this is a wrapped object with metadata
+                if isinstance(entry_chat, dict) and entry_chat.get("metadata"):
+                    if entry_chat.get("metadata", {}).get("run_id") == run_timestamp:
+                        matching_entry = entry
+                        break
+                
+                # For older entries, check if it's from today
+                elif entry.get("created_at", "").startswith(current_date):
+                    # If created today and has messages matching our current messages
+                    if (isinstance(entry_chat, list) and chat_data and 
+                        len(entry_chat) > 0 and len(chat_data) > 0):
+                        # Compare the first message for similarity
+                        entry_first_msg = entry_chat[0].get("message", "") if isinstance(entry_chat[0], dict) else ""
+                        our_first_msg = chat_data[0].get("message", "") if isinstance(chat_data[0], dict) else ""
+                        
+                        if entry_first_msg and our_first_msg and entry_first_msg == our_first_msg:
+                            matching_entry = entry
+                            break
+        
+        if not matching_entry and existing_entries.data:
+            # If no match but we have entries from today, use the most recent one
+            today_entries = [
+                entry for entry in existing_entries.data 
+                if entry.get("created_at", "").startswith(current_date)
+            ]
+            
+            if today_entries:
+                today_entries.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+                matching_entry = today_entries[0]
+        
+        if matching_entry:
+            # Found a matching entry, update it
+            entry_id = matching_entry["id"]
+            db_response = (
+                supabase_client.table("chat-history")
+                .update({
+                    "chat_history": wrapped_chat_data
+                })
+                .eq("id", entry_id)
+                .execute()
+            )
+            print(f"Updated existing chat history in Supabase for user ID: {user_id} and run: {run_timestamp}")
+        else:
+            # No matching entry found, create a new one
+            db_response = (
+                supabase_client.table("chat-history")
+                .insert({
+                    "user_id": user_id,
+                    "chat_history": wrapped_chat_data
+                })
+                .execute()
+            )
+            print(f"Created new chat history entry in Supabase for user ID: {user_id} and run: {run_timestamp}")
+        
+        return True
+    
+    except Exception as e:
+        print(f"Error updating chat history in Supabase: {e}")
         traceback.print_exc()
         return False
 
@@ -627,6 +865,9 @@ def update_conversation_files(state, previous_state=None):
         # Update timestamped chat history JSON file - containing ONLY the conversation
         chat_history_path = os.path.join(conv_dir, f"chat_history_{CURRENT_RUN_TIMESTAMP}.json")
         
+        # Track if chat history was updated (for Supabase syncing)
+        chat_history_updated = False
+        
         # Only proceed if we have conversation content
         if "conversation" in state and state["conversation"]:
             # Process conversation content (existing code) 
@@ -711,6 +952,34 @@ def update_conversation_files(state, previous_state=None):
                 json.dump(conversation_turns, f, indent=2)
             
             print(f"Updated chat history file with {len(conversation_turns)} conversation turns")
+            chat_history_updated = True
+            
+            # Upload chat history to Supabase in a background thread if it was updated
+            if chat_history_updated and CURRENT_FACE_ID and CURRENT_RUN_TIMESTAMP:
+                # Get a reference to the face_watcher instance if it exists
+                face_watcher_instance = None
+                # Try to get the face_watcher from the module scope
+                if 'face_watcher' in globals():
+                    face_watcher_instance = globals()['face_watcher']
+                
+                if face_watcher_instance:
+                    # Use the FaceDirectoryWatcher method that handles run timestamps
+                    upload_thread = threading.Thread(
+                        target=face_watcher_instance._sync_chat_history_files,
+                        args=(CURRENT_FACE_ID, CURRENT_RUN_TIMESTAMP)
+                    )
+                    upload_thread.daemon = True
+                    upload_thread.start()
+                    print(f"Started upload of chat history to Supabase for run: {CURRENT_RUN_TIMESTAMP}")
+                else:
+                    # Fall back to direct update if face_watcher isn't available
+                    upload_thread = threading.Thread(
+                        target=update_chat_history_in_supabase,
+                        args=(CURRENT_FACE_ID, chat_history_path)
+                    )
+                    upload_thread.daemon = True
+                    upload_thread.start()
+                    print(f"Started direct upload of chat history to Supabase in background thread")
         
         # KNOWLEDGE BASE: Append new knowledge to knowledge_base.txt (real-time)
         if "knowledge_base" in state and state["knowledge_base"]:
@@ -1050,7 +1319,7 @@ def patch_run_method(assistant):
             # Update with both current and previous state for incremental updates
             current_state = assistant.workflow.state
             update_conversation_files(current_state, last_state)
-            last_state = current_state.copy() if current_state else {}  # Store a copy of the current state
+            last_state = current_state.copy() if current_state else None  # Store a copy of the current state
         
         return result
     
@@ -1063,9 +1332,9 @@ def patch_run_method(assistant):
             
             # Save current state before update
             if hasattr(assistant.workflow, 'state'):
-                prev_state = assistant.workflow.state.copy() if assistant.workflow.state else {}
+                prev_state = assistant.workflow.state.copy() if assistant.workflow.state else None
             else:
-                prev_state = {}
+                prev_state = None
             
             # Call original update method
             result = original_update(user_input)
@@ -1073,7 +1342,7 @@ def patch_run_method(assistant):
             # Update files after state change
             if hasattr(assistant.workflow, 'state'):
                 update_conversation_files(assistant.workflow.state, prev_state)
-                last_state = assistant.workflow.state.copy() if assistant.workflow.state else {}
+                last_state = assistant.workflow.state.copy() if assistant.workflow.state else None
             
             return result
         
@@ -1195,7 +1464,7 @@ class FaceDirectoryWatcher:
         self._process_unprocessed_files()
     
     def _process_unprocessed_files(self):
-        """Check for any unprocessed files in the user-history database"""
+        """Check for any unprocessed files in the user-history database and sync chat history"""
         if not supabase_client:
             print("Supabase client not initialized. Cannot check for unprocessed files.")
             return
@@ -1216,35 +1485,155 @@ class FaceDirectoryWatcher:
             
             # Get all user IDs from the user-history table
             try:
+                # Get all existing user IDs with a profile_pic field that's not null
                 existing_users = (
                     supabase_client.table("user-history")
-                    .select("user_id")
+                    .select("user_id, profile_pic")
                     .execute()
                 )
                 
-                existing_user_ids = [user["user_id"] for user in existing_users.data]
-                print(f"Found {len(existing_user_ids)} existing users in the database")
+                existing_user_dict = {}
+                for user in existing_users.data:
+                    existing_user_dict[user["user_id"]] = user.get("profile_pic", "")
                 
-                # Find files that don't have corresponding entries
+                print(f"Found {len(existing_user_dict)} existing users in the database")
+                
+                # Find files that don't have corresponding entries, or have entries without profile pics
                 for user_id, file_path in face_files.items():
-                    if user_id not in existing_user_ids:
+                    if user_id not in existing_user_dict:
                         print(f"Found unprocessed face image for user ID: {user_id}")
                         self.file_queue.put(file_path)
+                    elif not existing_user_dict[user_id]:
+                        # User exists but has no profile pic
+                        print(f"User ID {user_id} exists but has no profile pic, queueing for update")
+                        self.file_queue.put(file_path)
+                    else:
+                        # User exists and has a profile pic
+                        expected_path = f"faces/face_{user_id}.jpg"
+                        if expected_path not in existing_user_dict[user_id]:
+                            print(f"User ID {user_id} has different profile pic, queueing for update")
+                            self.file_queue.put(file_path)
+                        else:
+                            print(f"Skipping user ID {user_id}, already has correct profile pic")
+                    
+                    # Sync chat history files for this user ID
+                    self._sync_chat_history_files(user_id)
+                
             except Exception as e:
                 print(f"Error checking existing users: {e}")
+                traceback.print_exc()
                 
-                # If there was an error, queue all files for processing
-                for file_path in face_files.values():
-                    self.file_queue.put(file_path)
+                # If error checking, be more cautious - check if we should queue any files
+                print("Using fallback approach: checking each user ID individually")
+                for user_id, file_path in face_files.items():
+                    try:
+                        # Try to check just this one user ID
+                        user_check = (
+                            supabase_client.table("user-history")
+                            .select("user_id, profile_pic")
+                            .eq("user_id", user_id)
+                            .execute()
+                        )
+                        
+                        if not user_check.data:
+                            print(f"User ID {user_id} not found, queueing for processing")
+                            self.file_queue.put(file_path)
+                        elif not user_check.data[0].get("profile_pic"):
+                            print(f"User ID {user_id} has no profile pic, queueing for update")
+                            self.file_queue.put(file_path)
+                    except:
+                        # If we can't even check individual users, don't queue to avoid duplicates
+                        print(f"Skipping check for user ID {user_id} due to database errors")
         except Exception as e:
             print(f"Error processing unprocessed files: {e}")
+            traceback.print_exc()
     
+    def _sync_chat_history_files(self, user_id, specific_timestamp=None):
+        """
+        Sync chat history files for a specific user ID to the Supabase chat-history table.
+        If specific_timestamp is provided, find and upload that specific run's file.
+        Otherwise, find and upload the most recent chat history file.
+        
+        For each run (identified by timestamp), we maintain exactly one entry in the
+        Supabase database, updating it as the conversation progresses.
+        
+        Args:
+            user_id: The numeric ID of the user
+            specific_timestamp: Optional timestamp to identify a specific chat history file
+        """
+        # Check if the conversation directory exists
+        conv_dir = os.path.join(os.getcwd(), "conversations", f"conversation_{user_id}")
+        if not os.path.exists(conv_dir):
+            print(f"No conversation directory found for user ID: {user_id}")
+            return
+        
+        # Find relevant chat history files for this user
+        chat_history_files = []
+        
+        # If specific timestamp is provided, find that exact file
+        if specific_timestamp:
+            target_file = os.path.join(conv_dir, f"chat_history_{specific_timestamp}.json")
+            if os.path.exists(target_file):
+                chat_history_files.append(target_file)
+                print(f"Found specific chat history file for run: {specific_timestamp}")
+            else:
+                # Try to find files that might contain this timestamp
+                for filename in os.listdir(conv_dir):
+                    if filename.startswith('chat_history_') and filename.endswith('.json'):
+                        if specific_timestamp in filename:
+                            chat_history_files.append(os.path.join(conv_dir, filename))
+            
+            if chat_history_files:
+                print(f"Found {len(chat_history_files)} files containing timestamp: {specific_timestamp}")
+        
+        # If no specific timestamp or no matching files found, get all chat history files
+        if not chat_history_files:
+            for filename in os.listdir(conv_dir):
+                if filename.startswith('chat_history_') and filename.endswith('.json'):
+                    chat_history_files.append(os.path.join(conv_dir, filename))
+        
+        if not chat_history_files:
+            print(f"No chat history files found for user ID: {user_id}")
+            return
+        
+        # Determine which file to use
+        if specific_timestamp and len(chat_history_files) == 1:
+            # If we have exactly one file for the specified timestamp, use it
+            target_file = chat_history_files[0]
+            print(f"Uploading specified chat history file for run: {specific_timestamp}")
+        else:
+            # Otherwise, sort by modification time and use the most recent
+            chat_history_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+            target_file = chat_history_files[0]
+            
+            # Extract timestamp from the filename for logging
+            file_basename = os.path.basename(target_file)
+            file_timestamp = "unknown"
+            if file_basename.startswith("chat_history_") and file_basename.endswith(".json"):
+                file_timestamp = file_basename[13:-5]
+            
+            print(f"Uploading chat history file: {file_basename} (timestamp: {file_timestamp})")
+        
+        # Create a thread to handle the upload
+        def upload_thread():
+            try:
+                # Pass the target file to the update function, which will handle
+                # finding/updating the corresponding entry in the database
+                update_chat_history_in_supabase(user_id, target_file)
+            except Exception as e:
+                print(f"Error uploading chat history for user ID {user_id}: {e}")
+                traceback.print_exc()
+        
+        thread = threading.Thread(target=upload_thread)
+        thread.daemon = True
+        thread.start()
+
     def stop(self):
         """Stop the directory watcher thread"""
         self.running = False
         if self.thread:
             self.thread.join(timeout=1.0)
-    
+
     def _watch_directory(self):
         """Watch the directory for new files"""
         print(f"Watching directory for new face images: {self.watch_dir}")
@@ -1262,7 +1651,7 @@ class FaceDirectoryWatcher:
             
             # Sleep before checking again
             time.sleep(2.0)
-    
+
     def _process_queue(self):
         """Process the queue of files to upload"""
         while self.running:
@@ -1280,7 +1669,7 @@ class FaceDirectoryWatcher:
                 self.file_queue.task_done()
             except Exception as e:
                 print(f"Error in queue processor: {e}")
-    
+
     def _process_file(self, file_path):
         """Process a single file"""
         try:
@@ -1315,6 +1704,10 @@ if __name__ == "__main__":
             sys.excepthook = excepthook
         
         print(f"Starting Conversation Assistant...")
+        
+        # Clean up duplicate entries in Supabase
+        if supabase_client:
+            clean_supabase_duplicates()
         
         # Start the face directory watcher
         face_watcher = FaceDirectoryWatcher()
