@@ -9,12 +9,201 @@ import cv2
 import shutil
 import json
 from modules.assistant import ConversationAssistant
+import threading
+from supabase import create_client
+from dotenv import load_dotenv
+import queue
+import glob
+
+# Load environment variables
+load_dotenv()
 
 # Global variable to store the current face ID
 CURRENT_FACE_ID = None
 last_state = None
 # Add global variable to store the current run timestamp
 CURRENT_RUN_TIMESTAMP = None
+
+# Supabase client setup
+supabase_url = os.environ.get("SUPABASE_URL", "")
+supabase_key = os.environ.get("SUPABASE_KEY", "")
+supabase_client = None
+
+if supabase_url and supabase_key:
+    try:
+        supabase_client = create_client(supabase_url, supabase_key)
+        print("Supabase client initialized for face image uploads")
+    except Exception as e:
+        print(f"Error initializing Supabase client: {e}")
+        supabase_client = None
+
+def upload_face_to_supabase(face_path, user_id):
+    """
+    Upload a face image to Supabase and create an entry in the user-history bucket.
+    
+    Args:
+        face_path: Path to the face image file
+        user_id: The numeric ID of the user extracted from the filename
+        
+    Returns:
+        bool: True if upload was successful, False otherwise
+    """
+    if not supabase_client:
+        print("Supabase client not initialized. Cannot upload face image.")
+        return False
+    
+    try:
+        # Get the filename without path
+        filename = os.path.basename(face_path)
+        
+        # Define the path in the avatars bucket
+        avatar_path = f"faces/{filename}"
+        
+        print(f"Uploading face image {filename} to Supabase avatars bucket...")
+        
+        # Upload the image file to the avatars bucket
+        with open(face_path, "rb") as f:
+            upload_response = (
+                supabase_client.storage
+                .from_("avatars")  # Bucket name for face images
+                .upload(
+                    file=f,
+                    path=avatar_path,
+                    file_options={"cache-control": "3600", "upsert": "true"}
+                )
+            )
+        
+        print(f"Face image uploaded to Supabase: {avatar_path}")
+        
+        # First check if a record with this user_id already exists
+        # Use the delete/insert pattern to ensure we never have duplicates
+        try:
+            # Get existing entries for this user_id
+            existing_data = (
+                supabase_client.table("user-history")
+                .select("id")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            
+            # If entries exist, delete them first
+            if existing_data.data and len(existing_data.data) > 0:
+                print(f"Found {len(existing_data.data)} existing entries for user ID: {user_id}, removing duplicates")
+                for entry in existing_data.data:
+                    delete_response = (
+                        supabase_client.table("user-history")
+                        .delete()
+                        .eq("id", entry["id"])
+                        .execute()
+                    )
+        except Exception as e:
+            print(f"Error checking/cleaning existing entries: {e}")
+            # Continue with insertion - we'll ensure uniqueness by user_id
+        
+        # Now insert a single new record
+        try:
+            db_response = (
+                supabase_client.table("user-history")
+                .insert({
+                    "user_id": user_id,
+                    "personal_info": [],  # Empty for new images
+                    "profile_pic": avatar_path,
+                    "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                .execute()
+            )
+            print(f"Created user-history entry for user ID: {user_id}")
+        except Exception as e:
+            print(f"Error creating user-history entry: {e}")
+            traceback.print_exc()
+            return False
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error uploading face to Supabase: {e}")
+        traceback.print_exc()
+        return False
+
+def update_personal_info_in_supabase(user_id, personal_info):
+    """
+    Update the personal information for a user in the Supabase database.
+    
+    Args:
+        user_id: The numeric ID of the user
+        personal_info: The personal information to update
+        
+    Returns:
+        bool: True if update was successful, False otherwise
+    """
+    if not supabase_client:
+        print("Supabase client not initialized. Cannot update personal info.")
+        return False
+    
+    try:
+        # First check if an entry exists for this user
+        existing_data = (
+            supabase_client.table("user-history")
+            .select("id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        # Multiple entries case - clean up duplicates first
+        if existing_data.data and len(existing_data.data) > 1:
+            print(f"Found {len(existing_data.data)} duplicate entries for user ID: {user_id}, cleaning up...")
+            # Keep the first entry, delete the rest
+            for i, entry in enumerate(existing_data.data):
+                if i > 0:  # Delete all but the first one
+                    delete_response = (
+                        supabase_client.table("user-history")
+                        .delete()
+                        .eq("id", entry["id"])
+                        .execute()
+                    )
+            # Re-query to get the remaining entry
+            existing_data = (
+                supabase_client.table("user-history")
+                .select("id")
+                .eq("user_id", user_id)
+                .execute()
+            )
+        
+        if existing_data.data and len(existing_data.data) == 1:
+            # Entry exists, update it
+            db_response = (
+                supabase_client.table("user-history")
+                .update({
+                    "personal_info": personal_info,
+                    "updated_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                .eq("id", existing_data.data[0]["id"])  # Use ID instead of user_id for more precise targeting
+                .execute()
+            )
+            print(f"Updated personal info in Supabase for user ID: {user_id}")
+            return True
+        elif not existing_data.data or len(existing_data.data) == 0:
+            # No entry found, need to create one with this personal info
+            print(f"No user-history entry found for user ID: {user_id}, creating new entry")
+            db_response = (
+                supabase_client.table("user-history")
+                .insert({
+                    "user_id": user_id,
+                    "personal_info": personal_info,
+                    "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                .execute()
+            )
+            print(f"Created new user-history entry with personal info for user ID: {user_id}")
+            return True
+        else:
+            # Should never reach here after our cleanup
+            print(f"Unexpected state: multiple entries still exist for user ID: {user_id}")
+            return False
+    except Exception as e:
+        print(f"Error updating personal info in Supabase: {e}")
+        traceback.print_exc()
+        return False
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Voice Assistant with Speaker Diarization")
@@ -213,6 +402,20 @@ def detect_and_recognize_face(assistant):
             
             # Initialize conversation directory for this face
             init_conversation_directory(numeric_id)
+            
+            # If this is a new face, upload it to Supabase
+            if is_new_face:
+                # Get the path to the face image
+                face_path = os.path.join(os.getcwd(), "conversations", "faces", f"{face_id}.jpg")
+                if os.path.exists(face_path):
+                    # Upload the face image to Supabase
+                    upload_thread = threading.Thread(
+                        target=upload_face_to_supabase,
+                        args=(face_path, numeric_id)
+                    )
+                    upload_thread.daemon = True
+                    upload_thread.start()
+                    print(f"Started upload of new face image to Supabase in background thread")
             
             # For existing faces, try to load previous conversation data
             if not is_new_face:
@@ -708,6 +911,16 @@ def update_conversation_files(state, previous_state=None):
                 print(f"Updated personal info JSON with {len(existing_personal_info)} items")
                 if new_items_added:
                     print(f"Newly added items: {', '.join(new_items_added)}")
+                
+                # Also update the personal info in Supabase
+                if CURRENT_FACE_ID:
+                    update_thread = threading.Thread(
+                        target=update_personal_info_in_supabase,
+                        args=(CURRENT_FACE_ID, existing_personal_info)
+                    )
+                    update_thread.daemon = True
+                    update_thread.start()
+                    print(f"Started update of personal info in Supabase in background thread")
             else:
                 print("No changes to personal info - skipping file update")
         
@@ -938,6 +1151,154 @@ def patch_run_method(assistant):
     # Replace the original run method with our wrapper
     assistant.run = wrapper
 
+class FaceDirectoryWatcher:
+    """
+    Watches the conversations/faces directory for new images and uploads them to Supabase.
+    """
+    def __init__(self):
+        self.watch_dir = os.path.join(os.getcwd(), "conversations", "faces")
+        self.processed_files = set()
+        self.running = False
+        self.thread = None
+        self.file_queue = queue.Queue()
+        
+        # Ensure the directory exists
+        os.makedirs(self.watch_dir, exist_ok=True)
+        
+        # Initial scan for existing files
+        self._scan_existing_files()
+    
+    def _scan_existing_files(self):
+        """Scan for existing files and add them to the processed list"""
+        for file_path in glob.glob(os.path.join(self.watch_dir, "face_*.jpg")):
+            self.processed_files.add(os.path.basename(file_path))
+            print(f"Added existing face file to processed list: {os.path.basename(file_path)}")
+    
+    def start(self):
+        """Start the directory watcher thread"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.thread = threading.Thread(target=self._watch_directory)
+        self.thread.daemon = True
+        self.thread.start()
+        print("Started face directory watcher thread")
+        
+        # Also start a worker thread to process the queue
+        worker_thread = threading.Thread(target=self._process_queue)
+        worker_thread.daemon = True
+        worker_thread.start()
+        print("Started face upload worker thread")
+        
+        # Check for any files that might have been added while the system was offline
+        self._process_unprocessed_files()
+    
+    def _process_unprocessed_files(self):
+        """Check for any unprocessed files in the user-history database"""
+        if not supabase_client:
+            print("Supabase client not initialized. Cannot check for unprocessed files.")
+            return
+        
+        try:
+            print("Checking for unprocessed face images...")
+            
+            # Get all files in the watch directory
+            face_files = {}
+            for file_path in glob.glob(os.path.join(self.watch_dir, "face_*.jpg")):
+                filename = os.path.basename(file_path)
+                user_id = filename[5:-4]  # Remove "face_" prefix and ".jpg" suffix
+                face_files[user_id] = file_path
+            
+            if not face_files:
+                print("No face files found in the directory")
+                return
+            
+            # Get all user IDs from the user-history table
+            try:
+                existing_users = (
+                    supabase_client.table("user-history")
+                    .select("user_id")
+                    .execute()
+                )
+                
+                existing_user_ids = [user["user_id"] for user in existing_users.data]
+                print(f"Found {len(existing_user_ids)} existing users in the database")
+                
+                # Find files that don't have corresponding entries
+                for user_id, file_path in face_files.items():
+                    if user_id not in existing_user_ids:
+                        print(f"Found unprocessed face image for user ID: {user_id}")
+                        self.file_queue.put(file_path)
+            except Exception as e:
+                print(f"Error checking existing users: {e}")
+                
+                # If there was an error, queue all files for processing
+                for file_path in face_files.values():
+                    self.file_queue.put(file_path)
+        except Exception as e:
+            print(f"Error processing unprocessed files: {e}")
+    
+    def stop(self):
+        """Stop the directory watcher thread"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+    
+    def _watch_directory(self):
+        """Watch the directory for new files"""
+        print(f"Watching directory for new face images: {self.watch_dir}")
+        while self.running:
+            try:
+                # Scan the directory for new files
+                for file_path in glob.glob(os.path.join(self.watch_dir, "face_*.jpg")):
+                    filename = os.path.basename(file_path)
+                    if filename not in self.processed_files:
+                        print(f"Found new face image: {filename}")
+                        self.file_queue.put(file_path)
+                        self.processed_files.add(filename)
+            except Exception as e:
+                print(f"Error in directory watcher: {e}")
+            
+            # Sleep before checking again
+            time.sleep(2.0)
+    
+    def _process_queue(self):
+        """Process the queue of files to upload"""
+        while self.running:
+            try:
+                # Get a file from the queue with timeout
+                try:
+                    file_path = self.file_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                
+                # Process the file
+                self._process_file(file_path)
+                
+                # Mark the task as done
+                self.file_queue.task_done()
+            except Exception as e:
+                print(f"Error in queue processor: {e}")
+    
+    def _process_file(self, file_path):
+        """Process a single file"""
+        try:
+            filename = os.path.basename(file_path)
+            
+            # Extract the user ID from the filename (format: face_TIMESTAMP.jpg)
+            if filename.startswith("face_") and filename.endswith(".jpg"):
+                user_id = filename[5:-4]  # Remove "face_" prefix and ".jpg" suffix
+                print(f"Processing new face image for user ID: {user_id}")
+                
+                # Upload to Supabase
+                upload_face_to_supabase(file_path, user_id)
+            else:
+                print(f"Skipping file with invalid format: {filename}")
+        except Exception as e:
+            print(f"Error processing file {file_path}: {e}")
+            traceback.print_exc()
+
 if __name__ == "__main__":
     try:
         args = parse_arguments()
@@ -954,6 +1315,10 @@ if __name__ == "__main__":
             sys.excepthook = excepthook
         
         print(f"Starting Conversation Assistant...")
+        
+        # Start the face directory watcher
+        face_watcher = FaceDirectoryWatcher()
+        face_watcher.start()
         
         # Handle test mode
         if args.test:
@@ -997,6 +1362,10 @@ if __name__ == "__main__":
         try:
             assistant.run()
         finally:
+            # Stop the face directory watcher
+            if 'face_watcher' in locals():
+                face_watcher.stop()
+            
             # Final update of conversation files if we have a face ID
             if CURRENT_FACE_ID and hasattr(assistant, 'workflow') and assistant.workflow:
                 update_conversation_files(assistant.workflow.state)
@@ -1007,6 +1376,10 @@ if __name__ == "__main__":
         
     except KeyboardInterrupt:
         print("\nExiting program due to keyboard interrupt")
+        # Stop the face directory watcher
+        if 'face_watcher' in locals():
+            face_watcher.stop()
+            
         # Final update of conversation files before exit
         if 'assistant' in locals() and CURRENT_FACE_ID and hasattr(assistant, 'workflow') and assistant.workflow:
             update_conversation_files(assistant.workflow.state)
