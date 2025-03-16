@@ -147,18 +147,31 @@ def load_existing_conversation_data(face_id):
                             most_recent_data = json.load(f2)
                             print(f"Loaded most recent conversation from: {most_recent}")
                             print(f"Found {len(most_recent_data)} conversation turns")
-                            
-                            # This is now just an array of conversation turns, not the full state
-                            # We don't directly update the workflow state with this
                         except json.JSONDecodeError:
                             print(f"Error reading chat history file: {most_recent}")
             
+            # Load knowledge base from existing state
+            knowledge_base = data.get("knowledge_base", {})
+            if knowledge_base:
+                print(f"Loaded knowledge base with {len(knowledge_base)} topics")
+            
+            # Load personal info from JSON if available
+            personal_info_json_path = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}", "personal_info.json")
+            if os.path.exists(personal_info_json_path):
+                try:
+                    with open(personal_info_json_path, 'r') as f:
+                        personal_info_data = json.load(f)
+                        data["personal_info"] = personal_info_data
+                        print(f"Loaded personal info with {len(personal_info_data)} items")
+                except json.JSONDecodeError:
+                    print("Error reading personal info JSON file")
+            
             # Print a summary
             kb = data.get("knowledge_base", {})
-            personal_info = data.get("personal_info", {})
+            personal_info = data.get("personal_info", [])
             
             print(f"Found {len(kb)} knowledge base topics")
-            print(f"Found {len(personal_info)} personal info categories")
+            print(f"Found {len(personal_info)} personal info items")
             
             return data
     except Exception as e:
@@ -349,10 +362,15 @@ def init_conversation_directory(face_id):
         
         # Create other necessary files if they don't exist
         files = [
-            "knowledge_base.txt",
-            "personal_info.txt",
             "conversation_data.json"
         ]
+        
+        # Initialize personal_info.json if it doesn't exist
+        personal_info_json_path = os.path.join(conv_dir, "personal_info.json")
+        if not os.path.exists(personal_info_json_path):
+            with open(personal_info_json_path, 'w') as f:
+                json.dump([], f, indent=2)
+            print(f"Created empty personal info JSON file")
         
         for file in files:
             file_path = os.path.join(conv_dir, file)
@@ -364,17 +382,17 @@ def init_conversation_directory(face_id):
                             "face_id": face_id,
                             "created_at": time.strftime('%Y-%m-%d %H:%M:%S'),
                             "last_updated": time.strftime('%Y-%m-%d %H:%M:%S'),
-                            "chat_history": [],
+                            "chat_history_files": [],
                             "knowledge_base": {},
-                            "personal_info": {}
+                            "personal_info": []
                         }, f, indent=2)
-                else:
-                    # For text files, just create empty files
-                    with open(file_path, 'w') as f:
-                        if file == "knowledge_base.txt":
-                            f.write(f"# Knowledge Base for Face ID: {face_id}\n\n")
-                        elif file == "personal_info.txt":
-                            f.write(f"# Personal Information for Face ID: {face_id}\n\n")
+        
+        # Create the text knowledge base file
+        kb_path = os.path.join(conv_dir, "knowledge_base.txt")
+        if not os.path.exists(kb_path):
+            with open(kb_path, 'w') as f:
+                f.write(f"# Knowledge Base for Face ID: {face_id}\n")
+                f.write(f"# Created: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
         return conv_dir
     except Exception as e:
@@ -408,7 +426,7 @@ def update_conversation_files(state, previous_state=None):
         
         # Only proceed if we have conversation content
         if "conversation" in state and state["conversation"]:
-            # Parse the conversation content
+            # Process conversation content (existing code) 
             conversation_content = state["conversation"]
             
             # Process the raw conversation text into a structured JSON format
@@ -456,7 +474,6 @@ def update_conversation_files(state, previous_state=None):
                             current_message.append(content)
                     
                     elif line.startswith('[SPEAKER '):
-                        # Handle other speakers (like [SPEAKER 1]:)
                         # If we were building a previous message, save it
                         if current_speaker:
                             conversation_turns.append({
@@ -492,58 +509,207 @@ def update_conversation_files(state, previous_state=None):
             
             print(f"Updated chat history file with {len(conversation_turns)} conversation turns")
         
-        # Also update the knowledge base txt file
-        if "knowledge_base" in state:
-            kb_path = os.path.join(conv_dir, "knowledge_base.txt")
-            with open(kb_path, 'w') as f:
-                f.write(f"# Knowledge Base for Face ID: {CURRENT_FACE_ID}\n")
-                f.write(f"# Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        # KNOWLEDGE BASE: Append new knowledge to knowledge_base.txt (real-time)
+        if "knowledge_base" in state and state["knowledge_base"]:
+            current_kb = state.get("knowledge_base", {})
+            
+            # Compare with previous state to find only new knowledge
+            prev_kb = {}
+            if previous_state and "knowledge_base" in previous_state:
+                prev_kb = previous_state.get("knowledge_base", {})
+            
+            # Calculate new or updated topics
+            new_topics = []
+            for topic, info in current_kb.items():
+                if topic not in prev_kb:
+                    new_topics.append((topic, info, "new"))
+                elif prev_kb[topic] != info:
+                    new_topics.append((topic, info, "updated"))
+            
+            # If there are new or updated topics, append them to the file
+            if new_topics:
+                kb_path = os.path.join(conv_dir, "knowledge_base.txt")
                 
-                knowledge_base = state.get("knowledge_base", {})
-                for topic, info in knowledge_base.items():
-                    f.write(f"## {topic}\n\n")
-                    if isinstance(info, list):
-                        for item in info:
-                            f.write(f"{item}\n\n")
-                    elif isinstance(info, dict):
-                        for key, value in info.items():
-                            f.write(f"- {key}: {value}\n")
-                    else:
-                        f.write(f"{info}\n")
-                    f.write("\n")
-        
-        # Update personal info txt file
-        if "personal_info" in state:
-            info_path = os.path.join(conv_dir, "personal_info.txt")
-            with open(info_path, 'w') as f:
-                f.write(f"# Personal Information for Face ID: {CURRENT_FACE_ID}\n")
-                f.write(f"# Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                # Read existing content to avoid duplication
+                existing_content = ""
+                if os.path.exists(kb_path):
+                    with open(kb_path, 'r') as f:
+                        existing_content = f.read()
                 
-                personal_info = state.get("personal_info", [])
-                
-                # Handle both list and dictionary formats based on example
-                if isinstance(personal_info, list):
-                    for item in personal_info:
-                        if isinstance(item, dict):
-                            item_type = item.get("type", "")
-                            value = item.get("value", "")
-                            confidence = item.get("confidence", "")
-                            f.write(f"## {item_type.capitalize()}\n")
-                            f.write(f"- Value: {value}\n")
-                            f.write(f"- Confidence: {confidence}\n\n")
+                # Append only new content
+                with open(kb_path, 'a') as f:
+                    # Add a timestamp for this update if file already has content
+                    if existing_content and not existing_content.endswith("\n\n"):
+                        f.write("\n\n")
+                    f.write(f"# Update: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    
+                    for topic, info, status in new_topics:
+                        # Check if this exact topic is already in the file to avoid duplication
+                        topic_header = f"## {topic}"
+                        if topic_header in existing_content:
+                            # If topic exists but content is different, add as update
+                            f.write(f"### Updated: {topic}\n\n")
                         else:
-                            f.write(f"{item}\n\n")
-                elif isinstance(personal_info, dict):
-                    for key, value in personal_info.items():
-                        f.write(f"## {key}\n")
-                        if isinstance(value, dict):
-                            for k, v in value.items():
-                                f.write(f"- {k}: {v}\n")
+                            f.write(f"## {topic}\n\n")
+                        
+                        if isinstance(info, list):
+                            for item in info:
+                                f.write(f"{item}\n\n")
+                        elif isinstance(info, dict):
+                            for key, value in info.items():
+                                f.write(f"- {key}: {value}\n")
                         else:
-                            f.write(f"- {value}\n")
+                            f.write(f"{info}\n")
                         f.write("\n")
+                
+                print(f"Appended {len(new_topics)} new/updated topics to knowledge base")
+                
+                # IMPORTANT: When knowledge base is updated due to search, also add relevant data to personal info
+                # This ensures search results automatically flow into personal information
+                if new_topics and "personal_info" not in state:
+                    # If we have new knowledge but no personal info yet, create it
+                    state["personal_info"] = []
+                
+                # Extract personal information from knowledge base updates
+                for topic, info, status in new_topics:
+                    # Only add new topics (not updates) to personal info
+                    if status == "new":
+                        # Create a personal info entry from this topic
+                        # Use a more robust structure depending on the info type
+                        if isinstance(info, dict):
+                            for key, value in info.items():
+                                if not isinstance(value, (dict, list)):  # Only add simple values
+                                    personal_info_item = {
+                                        "type": f"{topic}_{key}",
+                                        "value": str(value),
+                                        "source": "knowledge_base",
+                                        "confidence": "high"
+                                    }
+                                    # Append to state if not already there
+                                    if "personal_info" in state:
+                                        if isinstance(state["personal_info"], list):
+                                            # Check if this info is already in the list
+                                            if not any(
+                                                item.get("type") == personal_info_item["type"] and 
+                                                item.get("value") == personal_info_item["value"]
+                                                for item in state["personal_info"] if isinstance(item, dict)
+                                            ):
+                                                state["personal_info"].append(personal_info_item)
+                                                print(f"Added search result to personal info: {personal_info_item['type']}")
+        
+        # PERSONAL INFO: Update personal info as JSON with append-only updates (real-time)
+        if "personal_info" in state:
+            # Path to personal info JSON file
+            personal_info_json_path = os.path.join(conv_dir, "personal_info.json")
+            existing_personal_info = []
+            
+            # Try to load existing personal info from JSON if it exists
+            if os.path.exists(personal_info_json_path):
+                try:
+                    with open(personal_info_json_path, 'r') as f:
+                        existing_personal_info = json.load(f)
+                except json.JSONDecodeError:
+                    print("Error reading personal info JSON, starting fresh")
+                    existing_personal_info = []
+            
+            # Get current personal info from state
+            current_personal_info = state.get("personal_info", [])
+            
+            # Check if there's anything new to add
+            info_changed = False
+            new_items_added = []
+            
+            # IMPROVED DUPLICATE DETECTION
+            # Function to check if an item already exists in the list
+            def item_exists(new_item, existing_items):
+                """Check if an item already exists using multiple comparison strategies"""
+                if isinstance(new_item, dict):
+                    # Strategy 1: Check by "type" and "value" fields
+                    for existing in existing_items:
+                        if isinstance(existing, dict):
+                            # Case 1: Both type and value match
+                            if (new_item.get("type") == existing.get("type") and 
+                                new_item.get("value") == existing.get("value")):
+                                return True
+                            
+                            # Case 2: Types match but handle partial value matches
+                            if new_item.get("type") == existing.get("type"):
+                                new_val = str(new_item.get("value", "")).strip().lower()
+                                existing_val = str(existing.get("value", "")).strip().lower()
+                                # Check if one contains the other
+                                if new_val in existing_val or existing_val in new_val:
+                                    print(f"Similar value detected: '{new_val}' vs '{existing_val}'")
+                                    return True
+                            
+                            # Case 3: Values match but types are related
+                            if new_item.get("value") == existing.get("value"):
+                                new_type = str(new_item.get("type", "")).strip().lower()
+                                existing_type = str(existing.get("type", "")).strip().lower()
+                                # Check for related types
+                                if new_type in existing_type or existing_type in new_type:
+                                    print(f"Related types detected: '{new_type}' vs '{existing_type}'")
+                                    return True
+                                
+                    return False
                 else:
-                    f.write(f"{personal_info}\n\n")
+                    # For non-dict items, simple equality check
+                    return new_item in existing_items
+            
+            # Personal info could be a list or dict, handle both
+            if isinstance(current_personal_info, list):
+                # For list-based personal info, add new items
+                for item in current_personal_info:
+                    # Check if this item is already in the existing info
+                    if not item_exists(item, existing_personal_info):
+                        # Add timestamp to track when this was added
+                        if isinstance(item, dict):
+                            item_with_timestamp = item.copy()
+                            if "timestamp" not in item_with_timestamp:
+                                item_with_timestamp["timestamp"] = time.strftime('%Y-%m-%d %H:%M:%S')
+                            existing_personal_info.append(item_with_timestamp)
+                            item_desc = item.get("type", "Unknown")
+                            print(f"Added new personal info: {item_desc}")
+                            new_items_added.append(item_desc)
+                        else:
+                            # Simple values
+                            existing_personal_info.append(item)
+                            print("Added new simple personal info item")
+                            new_items_added.append(str(item))
+                        info_changed = True
+                    else:
+                        print(f"Skipped duplicate personal info: {item.get('type', str(item)[:20]+'...') if isinstance(item, dict) else str(item)}")
+            
+            elif isinstance(current_personal_info, dict):
+                # For dictionary-based personal info
+                for key, value in current_personal_info.items():
+                    # Convert to list format for consistency
+                    new_item = {
+                        "type": key,
+                        "value": value,
+                        "confidence": "high",
+                        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    
+                    # Check if this item is already in the existing info
+                    if not item_exists(new_item, existing_personal_info):
+                        existing_personal_info.append(new_item)
+                        print(f"Added new personal info category: {key}")
+                        new_items_added.append(key)
+                        info_changed = True
+                    else:
+                        print(f"Skipped duplicate personal info: {key}")
+            
+            # Only write to the file if something changed
+            if info_changed:
+                # Save the updated personal info to JSON
+                with open(personal_info_json_path, 'w') as f:
+                    json.dump(existing_personal_info, f, indent=2)
+                
+                print(f"Updated personal info JSON with {len(existing_personal_info)} items")
+                if new_items_added:
+                    print(f"Newly added items: {', '.join(new_items_added)}")
+            else:
+                print("No changes to personal info - skipping file update")
         
         # Also update the summary and topics in separate files if needed
         if "summary" in state:
