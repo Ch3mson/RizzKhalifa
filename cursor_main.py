@@ -11,6 +11,10 @@ import traceback
 import sys
 import cv2
 from datetime import datetime
+import wave
+import contextlib
+import requests
+from typing import List, Dict
 
 from modules.config import TRIGGER_PHRASE, STOP_PHRASE, get_output_file, GROQ_WHISPER_MODEL, GROQ_MODEL
 from modules.audio import AudioRecorder
@@ -76,6 +80,10 @@ class CursorAssistant:
         self.is_running = False
         self.active_listening = False
         
+        self.recent_transcriptions = []
+        self.max_recent_transcriptions = 5
+        self.repetition_threshold = 3  # Max allowed repetitions
+        
         if self.use_camera:
             try:
                 self.facial_recognition = FacialRecognitionModule()
@@ -124,6 +132,24 @@ class CursorAssistant:
             if not audio_file:
                 return None, False
             
+            # Check audio duration before processing
+            if audio_file:
+                with contextlib.closing(wave.open(audio_file, 'r')) as f:
+                    frames = f.getnframes()
+                    rate = f.getframerate()
+                    duration = frames / float(rate)
+                    
+                    # Skip very short audio segments (less than 0.5 seconds)
+                    if duration < 0.5:
+                        os.unlink(audio_file)  # clean up temp file
+                        return None, False
+            
+            # Check for repetitive transcriptions
+            if self._is_repetitive_transcription(audio_file):
+                print(f"Filtering repetitive transcription: {audio_file}")
+                os.unlink(audio_file)  # clean up temp
+                return None, False
+            
             # Transcribe the audio
             if self.use_diarization and self.user_reference_captured:
                 transcription, segments = self.transcriber.transcribe_with_speakers(
@@ -138,9 +164,35 @@ class CursorAssistant:
                 
                 print(f"Transcribed with {len(segments)} speaker segments: {transcription[:100]}...")
                 
-                # Store the segments in conversation history
-                self.speaker_segments.extend(segments)
+                # Filter out segments with just "you" or other noise words
+                filtered_segments = []
                 for segment in segments:
+                    segment_text = segment.get("text", "").strip().lower()
+                    
+                    # Skip segments with hallucinated "thank you" responses
+                    if ("thank you" in segment_text or 
+                        segment_text.startswith("thank") or 
+                        segment_text == "thanks" or 
+                        "you're welcome" in segment_text):
+                        print(f"Filtering out hallucinated segment: '{segment_text}'")
+                        continue
+                        
+                    # Skip segments with just "you" or very short noise
+                    if segment_text == "you" or segment_text in ["you.", "you?", "you!"] or len(segment_text) < 3:
+                        print(f"Filtering out noise segment: '{segment_text}'")
+                        continue
+                        
+                    filtered_segments.append(segment)
+                
+                # If all segments were filtered out, return None
+                if not filtered_segments:
+                    print("All segments were filtered as noise")
+                    os.unlink(audio_file)  # clean up temp
+                    return None, False
+                
+                # Store the filtered segments in conversation history
+                self.speaker_segments.extend(filtered_segments)
+                for segment in filtered_segments:
                     self.conversation_history.append({
                         "timestamp": time.time(),
                         "speaker": segment.get("speaker", "UNKNOWN"),
@@ -211,6 +263,12 @@ class CursorAssistant:
                                     os.unlink(video_file)
             else:
                 transcription = self.transcriber.transcribe(audio_file)
+                
+                # Check for repetitive transcriptions
+                if self._is_repetitive_transcription(transcription):
+                    print(f"Filtering repetitive transcription: {transcription}")
+                    os.unlink(audio_file)  # clean up temp
+                    return None, False
                 
                 # Ensure we have valid transcription
                 if not transcription or not transcription.strip():
@@ -606,6 +664,134 @@ class CursorAssistant:
         except Exception as e:
             print(f"Error saving temp video: {e}")
             return None
+
+    def transcribe(self, audio_file: str, detect_trigger_only=False) -> str:
+        headers = {
+            "Authorization": f"Bearer {os.environ.get('GROQ_API_KEY')}"
+        }
+        
+        files = {
+            "file": open(audio_file, "rb")
+        }
+        
+        data = {
+            "model": GROQ_WHISPER_MODEL
+        }
+        
+        response = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers=headers,
+            files=files,
+            data=data
+        )
+        
+        if response.status_code != 200:
+            print(f"Error in Groq transcription: Status {response.status_code} - {response.text}")
+            return ""
+        
+        result = response.json()
+        transcription = result.get("text", "")
+        
+        # Filter out common hallucinations like "thank you" and "you"
+        cleaned_text = transcription.strip().lower()
+        
+        # Explicitly filter out "thank you" in various forms
+        if (cleaned_text == "thank you" or 
+            cleaned_text.startswith("thank you") or 
+            cleaned_text.endswith("thank you") or
+            cleaned_text == "thank you." or
+            "thank you" in cleaned_text):
+            print(f"Filtering out hallucinated 'thank you': '{transcription}'")
+            return ""
+            
+        # Explicitly filter out "you" when it appears alone or with punctuation
+        if cleaned_text == "you" or cleaned_text in ["you.", "you?", "you!"]:
+            print(f"Filtering out single word 'you': '{transcription}'")
+            return ""
+            
+        # Add confidence filtering - if available in the API response
+        confidence = result.get("confidence", 1.0)
+        if confidence < 0.7:  # Adjust threshold as needed
+            print(f"Low confidence transcription ({confidence}): {transcription}")
+            return ""
+        
+        return transcription
+
+    def _is_repetitive_transcription(self, transcription):
+        """Check if a transcription is repetitively occurring or too short to be meaningful."""
+        if not transcription:
+            return False
+            
+        # List of common noise words to filter out
+        noise_words = ["you", "my", "me", "i", "a", "the", "um", "uh", "ah", "oh", "eh"]
+        
+        # List of common hallucinated phrases to filter out
+        hallucination_phrases = ["thank you", "thanks", "thank", "you're welcome"]
+        
+        # Filter out very short transcriptions or common noise words
+        if isinstance(transcription, str):
+            cleaned_text = transcription.strip().lower()
+            
+            # Filter out hallucinated phrases
+            for phrase in hallucination_phrases:
+                if phrase in cleaned_text:
+                    print(f"Filtering out hallucinated phrase: '{transcription}'")
+                    return True
+            
+            # Check if it's just a single word
+            words = cleaned_text.split()
+            if len(words) == 1:
+                # Check if it's in our noise words list
+                word = words[0].rstrip('.!?,:;')  # Remove any punctuation
+                if word in noise_words:
+                    print(f"Filtering out noise word: '{transcription}'")
+                    return True
+                # Or if it's very short
+                if len(word) < 3:
+                    print(f"Filtering out short word: '{transcription}'")
+                    return True
+            
+            # Also check if the entire transcription is just "you" with some extra characters
+            if cleaned_text == "you" or cleaned_text.startswith("you ") or cleaned_text.endswith(" you") or " you " in cleaned_text:
+                if len(cleaned_text) < 8:  # Only filter if it's a short phrase containing "you"
+                    print(f"Filtering out 'you' phrase: '{transcription}'")
+                    return True
+            
+        # Count occurrences in recent transcriptions
+        count = sum(1 for t in self.recent_transcriptions if t.lower() == transcription.lower())
+        
+        # Add to recent transcriptions
+        self.recent_transcriptions.append(transcription)
+        if len(self.recent_transcriptions) > self.max_recent_transcriptions:
+            self.recent_transcriptions.pop(0)  # Remove oldest
+            
+        return count >= self.repetition_threshold
+
+    def process_conversation(self, audio_file: str, segments: List[Dict], num_speakers: int = 2) -> List[Dict]:
+        # ... existing code ...
+        
+        # Combine very short segments that are close together
+        combined_segments = []
+        current_segment = None
+        
+        for segment in segments:
+            if current_segment is None:
+                current_segment = segment.copy()
+            elif segment["start"] - current_segment["end"] < 0.3:  # If segments are close
+                # Combine them
+                current_segment["end"] = segment["end"]
+                current_segment["text"] = current_segment["text"] + " " + segment["text"]
+            else:
+                combined_segments.append(current_segment)
+                current_segment = segment.copy()
+        
+        if current_segment:
+            combined_segments.append(current_segment)
+        
+        # Use combined segments for further processing
+        segments = combined_segments
+        
+        # ... continue with existing processing ...
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Cursor Assistant with Speech Diarization")

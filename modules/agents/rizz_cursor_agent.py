@@ -433,17 +433,21 @@ class RizzCursorAgent:
                                 # Insert record into the agent-audio database table
                                 try:
                                     # Insert a record with the file path, text content, and sentiment analysis
+                                    # Generate a short summary of the response
+                                    summary = self._generate_summary(text)
+                                    
                                     db_response = (
                                         self.supabase_client.table("agent-audio")
                                         .insert({
                                             "file_url": supabase_path,
                                             "text_content": text,
                                             "file_name": filename,
-                                            "sentiment": sentiment
+                                            "sentiment": sentiment,
+                                            "summary": summary  # Add summary field to database record
                                         })
                                         .execute()
                                     )
-                                    print(f"Inserted record with sentiment analysis into agent-audio database table")
+                                    print(f"Inserted record with sentiment analysis and summary into agent-audio database table")
                                 except Exception as e:
                                     print(f"Error inserting record into database: {e}")
                                     import traceback
