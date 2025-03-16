@@ -409,17 +409,21 @@ class RizzCursorAgent:
                                 # Insert record into the agent-audio database table
                                 try:
                                     # Insert a record with the file path, text content, and sentiment analysis
+                                    # Generate a short summary of the response
+                                    summary = self._generate_summary(text)
+                                    
                                     db_response = (
                                         self.supabase_client.table("agent-audio")
                                         .insert({
                                             "file_url": supabase_path,
                                             "text_content": text,
                                             "file_name": filename,
-                                            "sentiment": sentiment
+                                            "sentiment": sentiment,
+                                            "summary": summary  # Add summary field to database record
                                         })
                                         .execute()
                                     )
-                                    print(f"Inserted record with sentiment analysis into agent-audio database table")
+                                    print(f"Inserted record with sentiment analysis and summary into agent-audio database table")
                                 except Exception as e:
                                     print(f"Error inserting record into database: {e}")
                                     import traceback
@@ -677,3 +681,53 @@ class RizzCursorAgent:
             traceback.print_exc()
             # Return a default sentiment if analysis fails
             return {"sentiment": "neutral", "confidence": 0.5, "emotion": "unknown"}
+
+    def _generate_summary(self, text: str) -> str:
+        """
+        Generate a short summary of what the response is about.
+        
+        Args:
+            text: The response text to summarize
+            
+        Returns:
+            str: A concise summary of the response content
+        """
+        try:
+            # For very short texts, just return a slightly modified version
+            if len(text.split()) <= 7:
+                return f"Brief response: {text}"
+                
+            # Use Groq to generate a summary
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a summarization assistant. Create a very brief (5-7 words) summary of the text."},
+                    {"role": "user", "content": f"Summarize this response in 5-7 words: '{text}'"}
+                ],
+                temperature=0.3,
+                max_tokens=20,
+                top_p=1.0
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            
+            # Clean up the summary
+            if summary.startswith('"') and summary.endswith('"'):
+                summary = summary[1:-1]
+                
+            # Remove any "Summary:" type prefixes
+            prefixes_to_remove = ["Summary:", "In summary:", "Briefly:"]
+            for prefix in prefixes_to_remove:
+                if summary.startswith(prefix):
+                    summary = summary[len(prefix):].strip()
+            
+            print(f"Generated summary: {summary}")
+            return summary
+            
+        except Exception as e:
+            print(f"Error generating summary: {e}")
+            # Fallback to a simple extraction of the first few words
+            words = text.split()
+            if len(words) <= 5:
+                return text
+            return " ".join(words[:5]) + "..."
