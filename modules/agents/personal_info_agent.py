@@ -7,7 +7,6 @@ from langchain_core.runnables import RunnablePassthrough
 
 from modules.config import OPENAI_MODEL
 
-# Define the prompt template
 PERSONAL_INFO_PROMPT = ChatPromptTemplate.from_template(
     """Given the conversation summary below, identify any personal information the user shared 
 (e.g. "likes sushi", "birthday is July 10", "dislikes pineapple", etc.). 

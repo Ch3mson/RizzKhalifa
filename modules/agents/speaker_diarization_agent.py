@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import wave
 import contextlib
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
 
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 from pyannote.audio import Audio
@@ -40,18 +40,15 @@ class SpeakerDiarizationAgent:
         Capture a reference sample of the user's voice to identify them in future conversations.
         """
         try:
-            # Get audio duration
             with contextlib.closing(wave.open(audio_file, 'r')) as f:
                 frames = f.getnframes()
                 rate = f.getframerate()
                 duration = frames / float(rate)
             
-            # Extract embedding from the entire audio
             clip = Segment(0, duration)
             waveform, sample_rate = self.audio.crop(audio_file, clip)
             self.user_embedding = self.embedding_model(waveform[None])
             
-            # Store the user as the first known speaker
             self.known_speakers["USER"] = self.user_embedding
             
             print("✓ User voice reference captured successfully")
@@ -119,7 +116,6 @@ class SpeakerDiarizationAgent:
         """
         try:
             print(f"Processing conversation with {len(segments)} segments, expecting {num_speakers} speakers")
-            # Get audio duration
             with contextlib.closing(wave.open(audio_file, 'r')) as f:
                 frames = f.getnframes()
                 rate = f.getframerate()
@@ -183,14 +179,12 @@ class SpeakerDiarizationAgent:
                             )
                             similarities.append(sim)
                         
-                        # Use the highest similarity as the cluster's similarity
                         max_similarity = max(similarities)
                         avg_similarity = np.mean(similarities)
                         cluster_similarities[cluster_id] = max_similarity
                         
                         print(f"Cluster {cluster_id} similarity to user: {max_similarity:.4f} (avg: {avg_similarity:.4f})")
                 
-                # Find the cluster with highest similarity to user
                 if cluster_similarities:
                     user_cluster, highest_similarity = max(
                         cluster_similarities.items(), 
@@ -241,7 +235,6 @@ class SpeakerDiarizationAgent:
         Useful for determining if the current speaker is the user or someone else.
         """
         try:
-            # Get audio duration
             with contextlib.closing(wave.open(audio_file, 'r')) as f:
                 frames = f.getnframes()
                 rate = f.getframerate()

@@ -41,7 +41,6 @@ Return JSON with a "topics" array, each item containing:
 If no explicit preferences are found, return an empty topics array."""
 )
 
-# Define a direct extraction prompt template
 DIRECT_EXTRACTION_PROMPT = ChatPromptTemplate.from_template(
     """You are an expert at identifying and categorizing personal preferences and activities mentioned in text.
 
@@ -81,7 +80,6 @@ class TopicExtractionAgent:
         self.llm = ChatGroq(model=model, temperature=temperature)
         self.parser = JsonOutputParser()
         
-        # Build summary chain
         self.summary_chain = (
             {"summary": RunnablePassthrough()}
             | TOPIC_EXTRACTION_PROMPT
@@ -89,7 +87,6 @@ class TopicExtractionAgent:
             | self.parser
         )
         
-        # Build direct text chain
         self.direct_chain = (
             {"text": RunnablePassthrough()}
             | DIRECT_EXTRACTION_PROMPT

@@ -1,5 +1,3 @@
-# This file makes the agents directory a Python package.
-# Import all agents here for convenient access
 from modules.agents.search_agent import SearchAgent
 from modules.agents.processor_agent import ProcessorAgent
 from modules.agents.summarizer_agent import SummarizerAgent

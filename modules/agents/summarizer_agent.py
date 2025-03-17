@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_groq import ChatGroq
 from typing import Dict, List, Any
 
-from modules.config import OPENAI_MODEL, GROQ_MODEL
+from modules.config import GROQ_MODEL
 
-# Define the prompt template
 SUMMARIZER_PROMPT = ChatPromptTemplate.from_template(
     """You are an expert summarizer. Summarize the following conversation in a short paragraph:
 
@@ -39,17 +37,9 @@ class SummarizerAgent:
     def summarize(self, conversation: str, speaker_segments: List[Dict[str, Any]] = None) -> str:
         """
         Generate a summary of the conversation.
-        
-        Args:
-            conversation: The raw conversation text
-            speaker_segments: Optional list of diarized segments with speaker information
-            
-        Returns:
-            str: A summary of the conversation
         """
         speaker_info = ""
         if speaker_segments:
-            # Extract information about speakers and persons
             speakers = {}
             for segment in speaker_segments:
                 speaker_id = segment.get("speaker", "UNKNOWN")
@@ -58,7 +48,6 @@ class SummarizerAgent:
                 if speaker_id not in speakers:
                     speakers[speaker_id] = person_name
             
-            # Format the speaker information
             if speakers:
                 speaker_info = "Speaker Information:\n"
                 for speaker_id, person_name in speakers.items():

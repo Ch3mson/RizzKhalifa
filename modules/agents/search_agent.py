@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from typing import List, Dict
-from langchain_community.utilities import SearchApiAPIWrapper
 from langchain_core.tools import Tool
 from langchain_community.tools import DuckDuckGoSearchRun
 
@@ -32,17 +31,14 @@ class SearchAgent:
                     f"{topic} detailed information guide explanation after:2024-01-01 before:2025-12-31"
                 )
                 
-                # Split the response into paragraphs
                 paragraphs = response.split('\n\n')
                 
-                # Filter out empty paragraphs
                 detailed_results = []
                 for paragraph in paragraphs:
                     paragraph = paragraph.strip()
-                    if paragraph and len(paragraph) > 50:  # Only include substantial paragraphs
+                    if paragraph and len(paragraph) > 50:  
                         detailed_results.append(paragraph)
                 
-                # If we have fewer paragraphs than requested results, try another search with different terms
                 if len(detailed_results) < num_results:
                     additional_response = self.search.run(
                         f"{topic} comprehensive explanation details facts 2024 2025"
