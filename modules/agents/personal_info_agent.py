@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-from modules.config import OPENAI_MODEL
+from modules.config import GROQ_MODEL
 
 PERSONAL_INFO_PROMPT = ChatPromptTemplate.from_template(
     """Given the conversation summary below, identify any personal information the user shared 
@@ -22,8 +22,8 @@ each containing "type", "value", and "confidence"."""
 class PersonalInfoAgent:
     """Agent that extracts personal information from conversation summaries."""
     
-    def __init__(self, model=OPENAI_MODEL, temperature=0.1):
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
+    def __init__(self, model=GROQ_MODEL, temperature=0.1):
+        self.llm = ChatGroq(model=model, temperature=temperature)
         self.parser = JsonOutputParser()
         
         # Build chain
