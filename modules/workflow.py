@@ -2,6 +2,8 @@
 
 from typing import List, Dict, Any
 import concurrent.futures
+import time
+import os
 import traceback  
 
 from langgraph.graph import StateGraph, END
@@ -32,7 +34,6 @@ class ConversationWorkflow:
                 -> END
     """
     def __init__(self):
-        # Initialize agents
         self.processor_agent = ProcessorAgent()
         self.summarizer_agent = SummarizerAgent()
         self.topic_extraction_agent = TopicExtractionAgent()
@@ -40,16 +41,9 @@ class ConversationWorkflow:
         self.response_generation_agent = ResponseGenerationAgent()
         self.search_agent = SearchAgent()
 
-        # Initialize output helper
         self.text_output = TextOutput()
-
-        # Initialize state
         self.state = CONVERSATION_STATE_SCHEMA.copy()
-
-        # Track speaker information
         self.speaker_segments: List[Dict[str, Any]] = []
-
-        # Set up the graph
         self.setup_graph()
 
     def update_speaker_segments(self, segments: List[Dict]):
@@ -60,7 +54,6 @@ class ConversationWorkflow:
                 self.state["speaker_segments"] = []
             self.state["speaker_segments"].extend(segments)
 
-            # Log the speakers
             speakers = {seg["speaker"] for seg in segments if "speaker" in seg}
             persons = {seg["person"] for seg in segments if "person" in seg}
             if speakers:
@@ -80,7 +73,6 @@ class ConversationWorkflow:
               -> else: continue normal processing
         """
         try:
-            print("Setting up LangGraph workflow...")
             try:
                 import langgraph
                 print(f"Using LangGraph version: {langgraph.__version__}")
@@ -99,30 +91,23 @@ class ConversationWorkflow:
                 category = state_copy.get("category", "")
 
                 if category == "SKIP":
-                    print(f"Router: SKIP detected for input: '{state_copy.get('last_processed', '')[:50]}...'")
-                    # Remove category to avoid infinite loop
                     state_copy.pop("category", None)
-                    # Bump a 'restart_count' to avoid indefinite loops
                     restart_count = state_copy.get("restart_count", 0) + 1
                     state_copy["restart_count"] = restart_count
 
                     if restart_count > 3:
-                        print(f"Exceeded max restarts ({restart_count}), forcibly continuing.")
                         state_copy["restart_count"] = 0
                         state_copy["_routing"] = "continue"
                         return state_copy
 
-                    print(f"Restarting sequence (attempt {restart_count}/3)")
                     state_copy["_routing"] = "restart"
                     return state_copy
                 else:
-                    # Normal flow
-                    state_copy.pop("category", None)  # remove category once used
+                    state_copy.pop("category", None)  
                     state_copy["restart_count"] = 0
                     state_copy["_routing"] = "continue"
                     return state_copy
 
-            # Function that picks route from state["_routing"]
             def route_fn(state: ConversationState):
                 return state.get("_routing", "continue")
 
@@ -181,8 +166,6 @@ class ConversationWorkflow:
             workflow.add_node("extract_personal_info", safe_extract_personal_info)
             workflow.add_node("present_results", safe_present)
 
-            # Instead of using named parameters, pass positionally:
-            # add_conditional_edges(node_name, condition_function, mapping_dict)
             workflow.add_conditional_edges(
                 "check_category",
                 route_fn,
@@ -200,16 +183,11 @@ class ConversationWorkflow:
 
             workflow.set_entry_point("check_category")
             self.graph = workflow.compile()
-
-            if self.graph:
-                print("✓ LangGraph workflow successfully initialized.")
-            else:
-                print("! Failed to compile LangGraph.")
+            
         except Exception as e:
             print(f"! Graph setup error: {e}")
             traceback.print_exc()
             self.graph = None
-            print("Will fall back to linear execution.")
 
     def summarize_conversation(self, state: ConversationState) -> ConversationState:
         """Summarize the conversation text in state['conversation']."""
@@ -217,10 +195,8 @@ class ConversationWorkflow:
             copy_ = state.copy()
             conversation = copy_.get("conversation", "")
             if not conversation.strip():
-                print("No conversation text to summarize.")
                 copy_["summary"] = ""
                 return copy_
-            # If we have speaker segments, pass them for better summarization
             if "speaker_segments" in copy_ and copy_["speaker_segments"]:
                 summary = self.summarizer_agent.summarize(
                     conversation, speaker_segments=copy_["speaker_segments"]
@@ -230,7 +206,6 @@ class ConversationWorkflow:
             copy_["summary"] = summary
             return copy_
         except Exception as e:
-            print(f"Error in summarize_conversation: {e}")
             traceback.print_exc()
             c2 = state.copy()
             c2["summary"] = ""
@@ -242,14 +217,12 @@ class ConversationWorkflow:
             copy_ = state.copy()
             summary = copy_.get("summary", "")
             if not summary.strip():
-                print("No summary text to extract topics from.")
                 copy_["topics"] = []
                 return copy_
             topics = self.topic_extraction_agent.extract_topics(summary)
             copy_["topics"] = topics
             return copy_
         except Exception as e:
-            print(f"Error in extract_topics: {e}")
             traceback.print_exc()
             c2 = state.copy()
             c2["topics"] = []
@@ -266,23 +239,18 @@ class ConversationWorkflow:
             print("No last_processed text to analyze for search.")
             return copy_
 
-        # Use the processor agent again to see if it explicitly says "SEARCH_TOPIC"
         try:
             process_res = self.processor_agent.process(last_processed)
             if process_res.get("category") == "SEARCH_TOPIC":
-                # We should do a real search
                 new_topics = process_res.get("topics", [])
                 if new_topics:
-                    # Merge them into state["topics"]
                     existing = copy_.get("topics", [])
                     existing_names = {t.get("name") for t in existing if isinstance(t, dict)}
                     for t in new_topics:
-                        # Insert only if new
                         if isinstance(t, dict) and t.get("name") not in existing_names:
                             existing.append(t)
                     copy_["topics"] = existing
 
-                    # Actually run the search
                     to_search = []
                     for t in new_topics:
                         if isinstance(t, dict):
@@ -292,13 +260,11 @@ class ConversationWorkflow:
 
                     if to_search:
                         print(f"Searching for explicit user topics: {to_search}")
-                        # With concurrency & timeout
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(self.search_agent.search_topics, to_search)
                             try:
                                 kb_result = future.result(timeout=30)
                                 if kb_result:
-                                    # Merge into existing knowledge_base
                                     old_kb = copy_.get("knowledge_base", {})
                                     for ktopic, snips in kb_result.items():
                                         if ktopic not in old_kb:
@@ -306,7 +272,6 @@ class ConversationWorkflow:
                                         else:
                                             old_kb[ktopic].extend(snips)
                                     copy_["knowledge_base"] = old_kb
-                                    print(f"Updated knowledge base with {len(kb_result)} new topics.")
                             except concurrent.futures.TimeoutError:
                                 print("Search agent took too long (>30s). Skipping search.")
             else:
@@ -338,7 +303,6 @@ class ConversationWorkflow:
     def present_results(self, state: ConversationState) -> ConversationState:
         copy_ = state.copy()
         try:
-            # Pass "workflow_output.txt" as a positional argument
             self.text_output.save_to_file(copy_, "workflow_output.txt")
         except Exception as e:
             print(f"Error in present_results: {e}")
@@ -361,9 +325,7 @@ class ConversationWorkflow:
 
         self.state["last_processed"] = new_text
 
-        # Attempt the graph
         if self.graph:
-            print("Running input through LangGraph workflow...")
             try:
                 result = self.graph.invoke(self.state)
                 if result:
@@ -371,17 +333,13 @@ class ConversationWorkflow:
                 else:
                     print("Graph returned None; no updates applied.")
             except Exception as e:
-                print(f"Workflow error: {e}")
                 traceback.print_exc()
-                # fallback to linear
                 self._run_linear_fallback()
         else:
-            print("Graph not available; using linear fallback.")
             self._run_linear_fallback()
 
     def _run_linear_fallback(self):
         """If graph fails, run each node in sequence (serially)."""
-        print("Running linear fallback workflow...")
         st = self.summarize_conversation(self.state)
         st = self.extract_topics(st)
         st = self.search_for_topics(st)
