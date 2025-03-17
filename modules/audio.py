@@ -8,7 +8,7 @@ import wave
 import threading
 import numpy as np
 import sounddevice as sd
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional
 
 from modules.config import SAMPLE_RATE, CHANNELS, BUFFER_SIZE, SILENCE_THRESHOLD
 from modules.config import CONVERSATION_PAUSE, CONTINUOUS_PROCESSING_INTERVAL
@@ -31,7 +31,7 @@ class AudioRecorder:
         self.record_thread = None
         self.user_reference_path = None
         self.capturing_user_reference = False
-        self.user_reference_duration = 10.0  # 10 seconds for user voice reference
+        self.user_reference_duration = 10.0  
         self.user_reference_data = []
         
     def callback(self, indata, frames, time_info, status):
@@ -39,10 +39,8 @@ class AudioRecorder:
         if status:
             print(f"Stream status: {status}")
         
-        # Always put data in the main audio buffer
         self.audio_buffer.put(indata.copy())
         
-        # Detect silence
         volume_norm = np.linalg.norm(indata) / np.sqrt(len(indata))
         if volume_norm < SILENCE_THRESHOLD:
             self.silence_counter += frames / self.sample_rate
@@ -55,13 +53,12 @@ class AudioRecorder:
     def start_recording(self):
         """Start continuous recording in a separate thread"""
         if self.recording:
-            return  # Already recording
+            return  
         
         self.recording = True
         self.record_thread = threading.Thread(target=self._record_thread_func)
         self.record_thread.daemon = True 
         self.record_thread.start()
-        print("Audio recording started")
     
     def stop_recording(self):
         """Stop the recording thread"""
@@ -72,7 +69,6 @@ class AudioRecorder:
             self.stream.stop()
             self.stream.close()
             self.stream = None
-        print("Recording stopped")
     
     def _record_thread_func(self):
         """Main function for the recording thread"""
@@ -98,14 +94,6 @@ class AudioRecorder:
     def get_audio_segment(self, duration=CONTINUOUS_PROCESSING_INTERVAL, wait_for_pause=False, trigger_detection=False) -> Tuple[str, bool]:
         """
         Get a segment of audio for processing.
-        
-        Args:
-            duration: Duration of audio to capture (seconds)
-            wait_for_pause: Whether to wait for a pause in speech
-            trigger_detection: If True, optimize for fast trigger detection
-            
-        Returns:
-            Tuple of (audio_file_path, pause_detected)
         """
         if not self.recording:
             return "", False
@@ -118,34 +106,26 @@ class AudioRecorder:
         start_time = time.time()
         found_pause = False
         
-        # For trigger detection, use a shorter collection time
         actual_duration = 1.0 if trigger_detection else duration
         
         while self.recording:
-            # Try to get data with a short timeout
             try:
-                data = self.audio_buffer.get(timeout=0.05)  # Decreased timeout for faster processing
+                data = self.audio_buffer.get(timeout=0.05) 
                 collected_audio.append(data)
             except queue.Empty:
                 pass
             
-            # Check if we've collected enough audio
             elapsed = time.time() - start_time
             
-            # For trigger detection, use more aggressive timing
             if trigger_detection and elapsed >= actual_duration:
                 break
                 
-            # For normal processing
             elif wait_for_pause:
-                # If we detect a pause and have at least 1 second of audio, we're done
                 if self.pause_detected and elapsed >= 1.0:
                     found_pause = True
                     break
-                # Set a maximum duration even if no pause is detected
                 elif elapsed >= duration * 2: 
                     break
-            # For timed collection
             else:
                 if elapsed >= actual_duration:
                     break
@@ -170,32 +150,18 @@ class AudioRecorder:
     def capture_user_voice_reference(self, duration: float = 10.0) -> Optional[str]:
         """
         Capture a sample of the user's voice to use as a reference for speaker diarization.
-        
-        Args:
-            duration: How long to record the user's voice (in seconds)
-            
-        Returns:
-            Path to the saved user reference file, or None if failed
         """
         if self.recording:
-            print("Already recording. Please stop recording first.")
             return None
-            
-        print(f"\n===== CAPTURING USER VOICE REFERENCE =====")
-        print(f"Please speak continuously for {duration} seconds...")
-        print(f"This will help the assistant identify your voice in conversations.")
         
-        # Start recording specifically for user reference
         self.user_reference_duration = duration
         self.user_reference_data = []
         self.capturing_user_reference = True
         
-        # Create a temporary file for the user reference
         temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         self.user_reference_path = temp_file.name
         temp_file.close()
         
-        # Set up the recording stream
         try:
             stream = sd.InputStream(
                 samplerate=self.sample_rate,
@@ -207,17 +173,14 @@ class AudioRecorder:
             stream.start()
             start_time = time.time()
             
-            # Display a countdown
             while time.time() - start_time < duration:
                 remaining = duration - (time.time() - start_time)
                 print(f"\rRecording user reference: {remaining:.1f} seconds remaining...", end="")
                 time.sleep(0.1)
                 
-            print("\r\nFinished recording user reference!")
             stream.stop()
             stream.close()
             
-            # Save the recording
             if self.user_reference_data:
                 try:
                     audio_data = np.concatenate(self.user_reference_data, axis=0)

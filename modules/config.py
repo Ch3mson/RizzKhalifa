@@ -34,21 +34,17 @@ DEVICE = "cuda" if USE_GPU else "cpu"
 TRIGGER_PHRASE = "let me think"
 STOP_PHRASE = "ok ok ok"
 
-# Directory for storing conversation logs
 CONVERSATIONS_DIR = "conversations"
 
-# Function to generate a timestamped filename for conversation logs
 def get_output_file():
     """Get the path to save the conversation file."""
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     
-    # Create logs directory inside conversations folder
     logs_dir = os.path.join(os.getcwd(), "conversations", "system_logs")
     os.makedirs(logs_dir, exist_ok=True)
     
     return os.path.join(logs_dir, f"conversation-{timestamp}.txt")
 
-# For backward compatibility (will be initialized at runtime)
 OUTPUT_FILE = None
 
 from typing import List, Dict, Any, TypedDict
