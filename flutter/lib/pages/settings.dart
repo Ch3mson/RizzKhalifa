@@ -193,9 +193,7 @@ class SettingsPage extends StatelessWidget {
                       fontSize: 12,
                     ),
                   ),
-                  onTap: () {
-                    // Implement logout functionality
-                  },
+                  onTap: () {},
                 ),
               ),
               const SizedBox(height: 40),
@@ -204,9 +202,9 @@ class SettingsPage extends StatelessWidget {
         ),
       ),
       bottomNavigationBar: CustomBottomAppBar(
-        currentIndex: 3, // Settings is at index 3
+        currentIndex: 3,
         onItemTapped: (index) {
-          if (index == 3) return; // Already on settings page
+          if (index == 3) return;
 
           switch (index) {
             case 0:
