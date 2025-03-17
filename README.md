@@ -37,7 +37,7 @@ pyautogui>=0.9.53 (optional, for screen capture)
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/meta_rizz.git
+   git clone https://github.com/https://github.com/Ch3mson/RizzKhalifa.git
    cd meta_rizz
    ```
 
@@ -50,6 +50,10 @@ pyautogui>=0.9.53 (optional, for screen capture)
    
    Create a `.env` file in the project root with the following variables:
    ```
+   LANGSMITH_TRACING=true
+   LANGSMITH_ENDPOINT=your_langsmit_endpoint
+   LANGSMITH_API_KEY=your_langsmith_api_key
+   LANGSMITH_PROJECT=your_langsmith_project
    OPENAI_API_KEY=your_openai_api_key
    GROQ_API_KEY=your_groq_api_key
    SUPABASE_URL=your_supabase_url (optional)
@@ -68,7 +72,7 @@ To run the application:
 
 1. **Start the main application**:
    ```bash
-   python main.py
+   python ./api_server.py
    ```
 
 2. **In a separate terminal, start the cursor assistant**:
@@ -102,6 +106,9 @@ python cursor_main.py --no-diarization --screen --debug
    - After a short cooldown period (15 seconds), the assistant will suggest a smooth response
    - You can say "let me think" at any time to get an immediate response suggestion
 5. **Deactivate Listening Mode**: Say the stop phrase (default: "stop cursor") to exit active listening mode
+
+6. **Facial Recognition (optional)**:
+7. If using Meta glasses, call via messenger to allow faces to be captured through the computer screen. This allows the app to use --screen for capturing faces on your device
 
 ## Troubleshooting
 
