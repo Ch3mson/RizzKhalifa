@@ -5,8 +5,6 @@ import argparse
 import os
 import traceback
 import time
-import cv2
-import shutil
 import json
 from modules.assistant import ConversationAssistant
 import threading
@@ -15,16 +13,12 @@ from dotenv import load_dotenv
 import queue
 import glob
 
-# Load environment variables
 load_dotenv()
 
-# Global variable to store the current face ID
 CURRENT_FACE_ID = None
 last_state = None
-# Add global variable to store the current run timestamp
 CURRENT_RUN_TIMESTAMP = None
 
-# Supabase client setup
 supabase_url = os.environ.get("SUPABASE_URL", "")
 supabase_key = os.environ.get("SUPABASE_KEY", "")
 supabase_client = None
@@ -47,9 +41,6 @@ def clean_supabase_duplicates():
         return
     
     try:
-        print("Checking for duplicate entries in user-history table...")
-        
-        # Get all user IDs from the user-history table
         all_entries = (
             supabase_client.table("user-history")
             .select("id, user_id, created_at")
@@ -61,7 +52,6 @@ def clean_supabase_duplicates():
             print("No entries found in user-history table.")
             return
         
-        # Group entries by user_id
         user_entries = {}
         for entry in all_entries.data:
             user_id = entry.get("user_id")
@@ -69,26 +59,16 @@ def clean_supabase_duplicates():
                 user_entries[user_id] = []
             user_entries[user_id].append(entry)
         
-        # Find users with multiple entries
         duplicates_found = 0
         for user_id, entries in user_entries.items():
             if len(entries) > 1:
                 duplicates_found += len(entries) - 1
-                print(f"Found {len(entries)} entries for user ID: {user_id}")
-                
-                # Keep the first entry (oldest), delete the rest
-                # Sort by created_at to ensure we keep the oldest
                 entries.sort(key=lambda x: x.get("created_at", ""))
-                
-                # Keep track of all personal_info and profile_pic from all entries
-                # so we can merge them into the kept entry
                 all_personal_info = []
                 profile_pic = None
                 
-                # Get all data from entries we'll delete
                 for i, entry in enumerate(entries):
-                    if i > 0:  # Skip the first entry, which we'll keep
-                        # Get the full entry data
+                    if i > 0:  
                         full_entry = (
                             supabase_client.table("user-history")
                             .select("*")
@@ -98,14 +78,11 @@ def clean_supabase_duplicates():
                         
                         if full_entry.data:
                             entry_data = full_entry.data[0]
-                            # Collect personal info
                             if entry_data.get("personal_info"):
                                 all_personal_info.extend(entry_data["personal_info"])
-                            # Get profile pic if it exists
                             if entry_data.get("profile_pic") and not profile_pic:
                                 profile_pic = entry_data["profile_pic"]
                         
-                        # Delete the duplicate entry
                         delete_response = (
                             supabase_client.table("user-history")
                             .delete()
@@ -114,11 +91,9 @@ def clean_supabase_duplicates():
                         )
                         print(f"Deleted duplicate entry with ID: {entry['id']}")
                 
-                # Update the kept entry with merged data if we have any
                 if all_personal_info or profile_pic:
                     kept_entry = entries[0]
                     
-                    # Get the full entry data for the kept entry
                     full_kept_entry = (
                         supabase_client.table("user-history")
                         .select("*")
@@ -130,16 +105,13 @@ def clean_supabase_duplicates():
                         kept_data = full_kept_entry.data[0]
                         update_data = {}
                         
-                        # Merge personal info
                         if all_personal_info:
                             existing_personal_info = kept_data.get("personal_info", [])
-                            # Add new items while avoiding duplicates
                             for item in all_personal_info:
                                 if item not in existing_personal_info:
                                     existing_personal_info.append(item)
                             update_data["personal_info"] = existing_personal_info
                         
-                        # Use profile pic if the kept entry doesn't have one
                         if profile_pic and not kept_data.get("profile_pic"):
                             update_data["profile_pic"] = profile_pic
                         
@@ -151,12 +123,6 @@ def clean_supabase_duplicates():
                                 .eq("id", kept_entry["id"])
                                 .execute()
                             )
-                            print(f"Updated kept entry with merged data for user ID: {user_id}")
-        
-        if duplicates_found > 0:
-            print(f"Cleaned up {duplicates_found} duplicate entries from user-history table")
-        else:
-            print("No duplicate entries found in user-history table")
             
     except Exception as e:
         print(f"Error cleaning up duplicates: {e}")
@@ -166,27 +132,18 @@ def upload_face_to_supabase(face_path, user_id):
     """
     Upload a face image to Supabase and create an entry in the user-history bucket
     Ensures that only one entry per user_id exists in the user-history table
-    
-    Args:
-        face_path: Path to the face image file
-        user_id: Numeric ID of the user
-    
-    Returns:
-        bool: True if upload was successful, False otherwise
     """
     if not supabase_client:
         print("Supabase client not initialized. Cannot upload face.")
         return False
     
     try:
-        # Upload face image to avatars bucket
         file_name = os.path.basename(face_path)
         avatar_path = f"faces/{file_name}"
         
         with open(face_path, "rb") as f:
             file_content = f.read()
             
-        # Upload to avatars bucket
         bucket_response = supabase_client.storage.from_("avatars").upload(
             path=avatar_path,
             file=file_content,
@@ -195,7 +152,6 @@ def upload_face_to_supabase(face_path, user_id):
         
         print(f"Uploaded face image to Supabase: {avatar_path}")
         
-        # Check if an entry already exists for this user_id
         existing_data = (
             supabase_client.table("user-history")
             .select("id")
@@ -203,10 +159,7 @@ def upload_face_to_supabase(face_path, user_id):
             .execute()
         )
         
-        # If multiple entries exist, delete all but keep most complete one
         if existing_data.data and len(existing_data.data) > 1:
-            print(f"Found {len(existing_data.data)} duplicate entries for user ID: {user_id}, cleaning up...")
-            # Delete all entries for this user_id (we'll create a fresh one)
             for entry in existing_data.data:
                 delete_response = (
                     supabase_client.table("user-history")
@@ -216,9 +169,7 @@ def upload_face_to_supabase(face_path, user_id):
                 )
             existing_data.data = []
             
-        # Create a new entry or update existing entry
         if not existing_data.data or len(existing_data.data) == 0:
-            # Create new entry
             db_response = (
                 supabase_client.table("user-history")
                 .insert({
@@ -228,9 +179,7 @@ def upload_face_to_supabase(face_path, user_id):
                 })
                 .execute()
             )
-            print(f"Created new user-history entry for user ID: {user_id}")
         else:
-            # Update existing entry
             db_response = (
                 supabase_client.table("user-history")
                 .update({
@@ -239,8 +188,6 @@ def upload_face_to_supabase(face_path, user_id):
                 .eq("id", existing_data.data[0]["id"])
                 .execute()
             )
-            print(f"Updated existing user-history entry for user ID: {user_id}")
-            
         return True
     except Exception as e:
         print(f"Error uploading face to Supabase: {e}")
@@ -250,20 +197,12 @@ def upload_face_to_supabase(face_path, user_id):
 def update_personal_info_in_supabase(user_id, personal_info):
     """
     Update the personal information for a user in the Supabase database.
-    
-    Args:
-        user_id: The numeric ID of the user
-        personal_info: The personal information to update
-        
-    Returns:
-        bool: True if update was successful, False otherwise
     """
     if not supabase_client:
         print("Supabase client not initialized. Cannot update personal info.")
         return False
     
     try:
-        # First check if an entry exists for this user
         existing_data = (
             supabase_client.table("user-history")
             .select("id")
@@ -271,19 +210,15 @@ def update_personal_info_in_supabase(user_id, personal_info):
             .execute()
         )
         
-        # Multiple entries case - clean up duplicates first
         if existing_data.data and len(existing_data.data) > 1:
-            print(f"Found {len(existing_data.data)} duplicate entries for user ID: {user_id}, cleaning up...")
-            # Keep the first entry, delete the rest
             for i, entry in enumerate(existing_data.data):
-                if i > 0:  # Delete all but the first one
+                if i > 0: 
                     delete_response = (
                         supabase_client.table("user-history")
                         .delete()
                         .eq("id", entry["id"])
                         .execute()
                     )
-            # Re-query to get the remaining entry
             existing_data = (
                 supabase_client.table("user-history")
                 .select("id")
@@ -292,20 +227,16 @@ def update_personal_info_in_supabase(user_id, personal_info):
             )
         
         if existing_data.data and len(existing_data.data) == 1:
-            # Entry exists, update it
             db_response = (
                 supabase_client.table("user-history")
                 .update({
                     "personal_info": personal_info
                 })
-                .eq("id", existing_data.data[0]["id"])  # Use ID instead of user_id for more precise targeting
+                .eq("id", existing_data.data[0]["id"])  
                 .execute()
             )
-            print(f"Updated personal info in Supabase for user ID: {user_id}")
             return True
         elif not existing_data.data or len(existing_data.data) == 0:
-            # No entry found, need to create one with this personal info
-            print(f"No user-history entry found for user ID: {user_id}, creating new entry")
             db_response = (
                 supabase_client.table("user-history")
                 .insert({
@@ -314,11 +245,8 @@ def update_personal_info_in_supabase(user_id, personal_info):
                 })
                 .execute()
             )
-            print(f"Created new user-history entry with personal info for user ID: {user_id}")
             return True
         else:
-            # Should never reach here after our cleanup
-            print(f"Unexpected state: multiple entries still exist for user ID: {user_id}")
             return False
     except Exception as e:
         print(f"Error updating personal info in Supabase: {e}")
@@ -329,37 +257,24 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
     """
     Update the chat history for a user in the Supabase database.
     For each run, we create ONE entry in the chat-history table and update that same entry
-    as the conversation progresses.
-    
-    Args:
-        user_id: The numeric ID of the user
-        chat_history_file: Path to the JSON file containing chat history
-        
-    Returns:
-        bool: True if update was successful, False otherwise
     """
     if not supabase_client:
         print("Supabase client not initialized. Cannot update chat history.")
         return False
     
     try:
-        # Extract the run timestamp from the filename (format: chat_history_TIMESTAMP.json)
-        # We'll use this to identify which entry to update in Supabase
         filename = os.path.basename(chat_history_file)
         run_timestamp = ""
         if filename.startswith("chat_history_") and filename.endswith(".json"):
-            run_timestamp = filename[13:-5]  # Remove "chat_history_" prefix and ".json" suffix
+            run_timestamp = filename[13:-5]  
         else:
-            run_timestamp = time.strftime('%Y%m%d_%H%M%S')  # Use current time if filename doesn't match pattern
+            run_timestamp = time.strftime('%Y%m%d_%H%M%S') 
         
-        # Current date for filtering
         current_date = time.strftime('%Y-%m-%d')
         
-        # Read the chat history from the file
         with open(chat_history_file, 'r') as f:
             chat_data = json.load(f)
         
-        # Get all chat history entries for this user
         existing_entries = (
             supabase_client.table("chat-history")
             .select("id, created_at, chat_history")
@@ -367,33 +282,27 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
             .execute()
         )
         
-        # Create wrapped chat data that includes metadata
         wrapped_chat_data = {
             "metadata": {
                 "run_id": run_timestamp,
                 "updated_at": time.strftime('%Y-%m-%d %H:%M:%S')
             },
-            "messages": chat_data  # Store the actual messages as a nested object
+            "messages": chat_data  
         }
         
-        # Try to find matching entry for this run by examining the chat_history content
         matching_entry = None
         if existing_entries.data:
             for entry in existing_entries.data:
                 entry_chat = entry.get("chat_history", {})
                 
-                # Check if this is a wrapped object with metadata
                 if isinstance(entry_chat, dict) and entry_chat.get("metadata"):
                     if entry_chat.get("metadata", {}).get("run_id") == run_timestamp:
                         matching_entry = entry
                         break
                 
-                # For older entries, check if it's from today
                 elif entry.get("created_at", "").startswith(current_date):
-                    # If created today and has messages matching our current messages
                     if (isinstance(entry_chat, list) and chat_data and 
                         len(entry_chat) > 0 and len(chat_data) > 0):
-                        # Compare the first message for similarity
                         entry_first_msg = entry_chat[0].get("message", "") if isinstance(entry_chat[0], dict) else ""
                         our_first_msg = chat_data[0].get("message", "") if isinstance(chat_data[0], dict) else ""
                         
@@ -402,7 +311,6 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
                             break
         
         if not matching_entry and existing_entries.data:
-            # If no match but we have entries from today, use the most recent one
             today_entries = [
                 entry for entry in existing_entries.data 
                 if entry.get("created_at", "").startswith(current_date)
@@ -413,7 +321,6 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
                 matching_entry = today_entries[0]
         
         if matching_entry:
-            # Found a matching entry, update it
             entry_id = matching_entry["id"]
             db_response = (
                 supabase_client.table("chat-history")
@@ -423,9 +330,7 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
                 .eq("id", entry_id)
                 .execute()
             )
-            print(f"Updated existing chat history in Supabase for user ID: {user_id} and run: {run_timestamp}")
         else:
-            # No matching entry found, create a new one
             db_response = (
                 supabase_client.table("chat-history")
                 .insert({
@@ -434,12 +339,9 @@ def update_chat_history_in_supabase(user_id, chat_history_file):
                 })
                 .execute()
             )
-            print(f"Created new chat history entry in Supabase for user ID: {user_id} and run: {run_timestamp}")
-        
         return True
     
     except Exception as e:
-        print(f"Error updating chat history in Supabase: {e}")
         traceback.print_exc()
         return False
 
@@ -465,71 +367,6 @@ def parse_arguments():
     
     return parser.parse_args()
 
-def test_workflow():
-    """Test the workflow functionality directly without audio input"""
-    from modules.workflow import ConversationWorkflow
-    print("\n===== TESTING WORKFLOW FUNCTIONALITY =====")
-    
-    # Create test directory
-    log_dir = os.path.join(os.getcwd(), "test_results")
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # Initialize workflow
-    workflow = ConversationWorkflow()
-    
-    # Test inputs that should trigger search
-    test_inputs = [
-        "Tell me about quantum computing",
-        "What's happening with AI developments in 2024?",
-        "I'm interested in learning about clean energy innovations"
-    ]
-    
-    results = {}
-    
-    # Process each test input
-    for i, test_input in enumerate(test_inputs):
-        print(f"\n\n==== Test {i+1}: {test_input} ====")
-        try:
-            # Get baseline state
-            if hasattr(workflow, 'graph') and workflow.graph:
-                print("Using workflow graph to process")
-                initial_state = workflow.state.copy()
-                workflow.update_conversation(test_input)
-                results[f"test_{i+1}"] = {
-                    "input": test_input,
-                    "success": True,
-                    "has_knowledge_base": "knowledge_base" in workflow.state,
-                    "kb_size": len(workflow.state.get("knowledge_base", {}))
-                }
-            else:
-                print("⚠ Workflow graph not initialized correctly")
-                results[f"test_{i+1}"] = {
-                    "input": test_input,
-                    "success": False,
-                    "error": "Workflow graph not initialized"
-                }
-        except Exception as e:
-            print(f"❌ Test {i+1} failed with error: {e}")
-            traceback.print_exc()
-            results[f"test_{i+1}"] = {
-                "input": test_input,
-                "success": False,
-                "error": str(e)
-            }
-    
-    # Print results summary
-    print("\n===== TEST RESULTS SUMMARY =====")
-    success_count = sum(1 for r in results.values() if r["success"])
-    print(f"Successful tests: {success_count}/{len(test_inputs)}")
-    
-    for test_id, result in results.items():
-        status = "✓" if result["success"] else "❌"
-        kb_info = f", KB: {result['kb_size']} topics" if result["success"] and "kb_size" in result else ""
-        error = f" - Error: {result['error']}" if not result["success"] and "error" in result else ""
-        print(f"{status} {test_id}: '{result['input'][:30]}...'{kb_info}{error}")
-    
-    return success_count == len(test_inputs)
-
 def load_existing_conversation_data(face_id):
     """
     Load existing conversation data for a recognized face.
@@ -541,48 +378,30 @@ def load_existing_conversation_data(face_id):
         dict: The loaded conversation data or None if not found
     """
     try:
-        # Path to the main JSON file
         json_path = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}", "conversation_data.json")
         
-        # Check if the file exists
         if not os.path.exists(json_path):
             print(f"No existing conversation data found for face ID: {face_id}")
             return None
         
-        # Load the main data file
         with open(json_path, 'r') as f:
             data = json.load(f)
-            print(f"Loaded existing conversation data for face ID: {face_id}")
-            print(f"Last conversation updated: {data.get('last_updated', 'unknown')}")
             
-            # Get list of available chat history files
             chat_history_files = data.get("chat_history_files", [])
             
             if chat_history_files:
-                print(f"Found {len(chat_history_files)} previous conversation sessions")
                 
-                # Sort by timestamp to get the most recent one
                 chat_history_files.sort(reverse=True)
                 most_recent = chat_history_files[0]
-                
-                # Load the most recent chat history - but DON'T use it to initialize the workflow state
-                # The conversation history is now just the turns of dialog, not the complete state
                 most_recent_path = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}", most_recent)
                 if os.path.exists(most_recent_path):
                     with open(most_recent_path, 'r') as f2:
                         try:
                             most_recent_data = json.load(f2)
-                            print(f"Loaded most recent conversation from: {most_recent}")
-                            print(f"Found {len(most_recent_data)} conversation turns")
                         except json.JSONDecodeError:
                             print(f"Error reading chat history file: {most_recent}")
             
-            # Load knowledge base from existing state
             knowledge_base = data.get("knowledge_base", {})
-            if knowledge_base:
-                print(f"Loaded knowledge base with {len(knowledge_base)} topics")
-            
-            # Load personal info from JSON if available
             personal_info_json_path = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}", "personal_info.json")
             if os.path.exists(personal_info_json_path):
                 try:
@@ -593,12 +412,8 @@ def load_existing_conversation_data(face_id):
                 except json.JSONDecodeError:
                     print("Error reading personal info JSON file")
             
-            # Print a summary
             kb = data.get("knowledge_base", {})
             personal_info = data.get("personal_info", [])
-            
-            print(f"Found {len(kb)} knowledge base topics")
-            print(f"Found {len(personal_info)} personal info items")
             
             return data
     except Exception as e:
@@ -608,166 +423,112 @@ def load_existing_conversation_data(face_id):
 def detect_and_recognize_face(assistant):
     """
     Captures a single frame, detects a face, and compares it with stored faces.
-    If a match is found, returns the face ID.
-    If no match, saves the new face for future recognition.
     """
     global CURRENT_FACE_ID, last_state
     
     if not assistant.use_camera or not assistant.facial_recognition:
         print("Camera or facial recognition is not enabled. Skipping face detection.")
         return None
-    
-    print("\n===== STARTING FACIAL RECOGNITION =====")
-    print("Capturing frame for face detection...")
-    # Capture a single frame
     frame = assistant._capture_screen_frame()
     if frame is None:
         print("Error: Failed to capture frame for face detection.")
         return None
     
-    print(f"Successfully captured frame with shape: {frame.shape}")
-    
-    # Process the frame with our improved face recognition method
     try:
         print("Calling InsightFace facial recognition...")
         face_id, is_new_face = assistant.facial_recognition.manage_face_recognition(frame)
         
         if face_id:
-            # Extract the numeric ID from the face_id (format: "face_TIMESTAMP")
             numeric_id = face_id.split('_')[1]
             CURRENT_FACE_ID = numeric_id
             print(f"Setting current face ID to: {CURRENT_FACE_ID}")
             
-            # Initialize conversation directory for this face
             init_conversation_directory(numeric_id)
             
-            # If this is a new face, upload it to Supabase
             if is_new_face:
-                # Get the path to the face image
                 face_path = os.path.join(os.getcwd(), "conversations", "faces", f"{face_id}.jpg")
                 if os.path.exists(face_path):
-                    # Upload the face image to Supabase
                     upload_thread = threading.Thread(
                         target=upload_face_to_supabase,
                         args=(face_path, numeric_id)
                     )
                     upload_thread.daemon = True
                     upload_thread.start()
-                    print(f"Started upload of new face image to Supabase in background thread")
             
-            # For existing faces, try to load previous conversation data
             if not is_new_face:
-                print(f"Success: Recognized existing face with ID: {face_id}")
-                
-                # Load existing conversation data
                 existing_data = load_existing_conversation_data(numeric_id)
                 
-                # If we successfully loaded data and the assistant has a workflow, initialize it
                 if existing_data and hasattr(assistant, 'workflow'):
-                    # Try to initialize the workflow state with existing data
                     try:
-                        print("Attempting to restore previous conversation state...")
-                        
-                        # Initialize the workflow state if needed
                         if not hasattr(assistant.workflow, 'state') or not assistant.workflow.state:
                             assistant.workflow.state = {}
                         
-                        # Copy elements from existing data to workflow state
                         if "chat_history" in existing_data and existing_data["chat_history"]:
                             assistant.workflow.state["chat_history"] = existing_data["chat_history"]
-                            print(f"Restored {len(existing_data['chat_history'])} previous messages")
                         
                         if "knowledge_base" in existing_data and existing_data["knowledge_base"]:
                             assistant.workflow.state["knowledge_base"] = existing_data["knowledge_base"]
-                            print(f"Restored {len(existing_data['knowledge_base'])} knowledge base topics")
                         
                         if "personal_info" in existing_data and existing_data["personal_info"]:
                             assistant.workflow.state["personal_info"] = existing_data["personal_info"]
-                            print(f"Restored {len(existing_data['personal_info'])} personal info categories")
                         
-                        # Store the current state as the last state to prevent duplicate updates
                         last_state = assistant.workflow.state.copy() if assistant.workflow.state else None
                         
                     except Exception as e:
                         print(f"Error restoring conversation state: {e}")
                         traceback.print_exc()
-            else:
-                print(f"Success: New face detected and saved with ID: {face_id}")
             
-            # Set the current face for the conversation
             assistant.facial_recognition.update_current_face(
                 face_name=face_id,
-                face_embedding=None  # The embedding is already saved with the face
+                face_embedding=None  
             )
             
             return face_id
         else:
-            print("Error: No face detected or recognition failed.")
-            # Try again with a different approach - take multiple samples
-            print("Attempting detection with alternative approach...")
-            for _ in range(3):  # Try up to 3 more times
-                time.sleep(1)  # Wait a second between attempts
+            for _ in range(3): 
+                time.sleep(1)  
                 frame = assistant._capture_screen_frame()
                 if frame is not None:
                     try:
                         face_id, is_new_face = assistant.facial_recognition.manage_face_recognition(frame)
                         if face_id:
-                            # Extract the numeric ID from the face_id
                             numeric_id = face_id.split('_')[1]
                             CURRENT_FACE_ID = numeric_id
-                            print(f"Setting current face ID to: {CURRENT_FACE_ID}")
                             
-                            # Initialize conversation directory for this face
                             init_conversation_directory(numeric_id)
                             
-                            # For existing faces, try to load previous conversation data
                             if not is_new_face:
-                                # Load existing conversation data
                                 existing_data = load_existing_conversation_data(numeric_id)
                                 
-                                # If we successfully loaded data and the assistant has a workflow, initialize it
                                 if existing_data and hasattr(assistant, 'workflow'):
-                                    # Initialize workflow state with existing data
                                     try:
-                                        print("Attempting to restore previous conversation state...")
-                                        
-                                        # Initialize the workflow state if needed
                                         if not hasattr(assistant.workflow, 'state') or not assistant.workflow.state:
                                             assistant.workflow.state = {}
                                         
-                                        # Copy elements from existing data to workflow state
                                         if "chat_history" in existing_data and existing_data["chat_history"]:
                                             assistant.workflow.state["chat_history"] = existing_data["chat_history"]
-                                            print(f"Restored {len(existing_data['chat_history'])} previous messages")
                                         
                                         if "knowledge_base" in existing_data and existing_data["knowledge_base"]:
                                             assistant.workflow.state["knowledge_base"] = existing_data["knowledge_base"]
-                                            print(f"Restored {len(existing_data['knowledge_base'])} knowledge base topics")
                                         
                                         if "personal_info" in existing_data and existing_data["personal_info"]:
                                             assistant.workflow.state["personal_info"] = existing_data["personal_info"]
-                                            print(f"Restored {len(existing_data['personal_info'])} personal info categories")
                                         
-                                        # Store the current state as the last state to prevent duplicate updates
                                         last_state = assistant.workflow.state.copy() if assistant.workflow.state else None
                                         
                                     except Exception as e:
-                                        print(f"Error restoring conversation state: {e}")
                                         traceback.print_exc()
                             
-                            print(f"Success on retry: Face detected with ID: {face_id}")
                             assistant.facial_recognition.update_current_face(
                                 face_name=face_id,
                                 face_embedding=None
                             )
                             return face_id
                     except Exception as e:
-                        print(f"Error during retry: {e}")
-            
-            print("All retry attempts failed. No face detected.")
+                        print(f"Error restoring conversation state: {e}")
+                        traceback.print_exc()
             return None
     except Exception as e:
-        print(f"Error during face recognition: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -776,47 +537,32 @@ def init_conversation_directory(face_id):
     """
     Initialize the conversation directory structure for a specific face ID.
     Creates a conversations/conversation_{id} directory with necessary files.
-    
-    Args:
-        face_id: The numeric ID of the detected face
     """
     global CURRENT_RUN_TIMESTAMP
     
     try:
-        # Generate a timestamp for this run
         CURRENT_RUN_TIMESTAMP = time.strftime('%Y%m%d_%H%M%S')
         
-        # Create the conversation directory inside the conversations directory
         conv_dir = os.path.join(os.getcwd(), "conversations", f"conversation_{face_id}")
         os.makedirs(conv_dir, exist_ok=True)
         
-        print(f"Initialized conversation directory: {conv_dir}")
-        
-        # Create the new timestamped chat history file - empty array for conversation turns
         chat_history_path = os.path.join(conv_dir, f"chat_history_{CURRENT_RUN_TIMESTAMP}.json")
         
-        # Initialize the JSON file with empty array - just for conversation
         with open(chat_history_path, 'w') as f:
             json.dump([], f, indent=2)
             
-        print(f"Created new chat history file for this run: {chat_history_path}")
-        
-        # Create other necessary files if they don't exist
         files = [
             "conversation_data.json"
         ]
         
-        # Initialize personal_info.json if it doesn't exist
         personal_info_json_path = os.path.join(conv_dir, "personal_info.json")
         if not os.path.exists(personal_info_json_path):
             with open(personal_info_json_path, 'w') as f:
                 json.dump([], f, indent=2)
-            print(f"Created empty personal info JSON file")
         
         for file in files:
             file_path = os.path.join(conv_dir, file)
             if not os.path.exists(file_path):
-                # For JSON file, initialize with empty structure
                 if file.endswith('.json'):
                     with open(file_path, 'w') as f:
                         json.dump({
@@ -828,7 +574,6 @@ def init_conversation_directory(face_id):
                             "personal_info": []
                         }, f, indent=2)
         
-        # Create the text knowledge base file
         kb_path = os.path.join(conv_dir, "knowledge_base.txt")
         if not os.path.exists(kb_path):
             with open(kb_path, 'w') as f:
@@ -844,10 +589,6 @@ def update_conversation_files(state, previous_state=None):
     """
     Update the conversation files with the current state.
     This includes the timestamped chat history, knowledge base, and personal info.
-    
-    Args:
-        state: The current LangGraph state containing conversation data
-        previous_state: The previous state to compare against for incremental updates
     """
     global CURRENT_FACE_ID, CURRENT_RUN_TIMESTAMP
     
@@ -856,31 +597,20 @@ def update_conversation_files(state, previous_state=None):
         return
     
     try:
-        # Ensure path is inside conversations directory
         conv_dir = os.path.join(os.getcwd(), "conversations", f"conversation_{CURRENT_FACE_ID}")
         if not os.path.exists(conv_dir):
             print(f"Conversation directory does not exist, creating: {conv_dir}")
             init_conversation_directory(CURRENT_FACE_ID)
         
-        # Update timestamped chat history JSON file - containing ONLY the conversation
         chat_history_path = os.path.join(conv_dir, f"chat_history_{CURRENT_RUN_TIMESTAMP}.json")
         
-        # Track if chat history was updated (for Supabase syncing)
         chat_history_updated = False
         
-        # Only proceed if we have conversation content
         if "conversation" in state and state["conversation"]:
-            # Process conversation content (existing code) 
             conversation_content = state["conversation"]
-            
-            # Process the raw conversation text into a structured JSON format
-            # The conversation usually has format like:
-            # [USER]: message content
-            # [ASSISTANT]: response content
             
             conversation_turns = []
             
-            # Split by speaker turns and process
             if conversation_content:
                 lines = conversation_content.split('\n')
                 current_speaker = None
@@ -888,7 +618,6 @@ def update_conversation_files(state, previous_state=None):
                 
                 for line in lines:
                     if line.startswith('[USER]:'):
-                        # If we were building a previous message, save it
                         if current_speaker:
                             conversation_turns.append({
                                 "speaker": current_speaker,
@@ -896,14 +625,12 @@ def update_conversation_files(state, previous_state=None):
                             })
                             current_message = []
                         
-                        # Start a new user message
                         current_speaker = "USER"
                         content = line[len('[USER]:'):].strip()
-                        if content:  # Only add if there's content on this line
+                        if content: 
                             current_message.append(content)
                     
                     elif line.startswith('[ASSISTANT]:'):
-                        # If we were building a previous message, save it
                         if current_speaker:
                             conversation_turns.append({
                                 "speaker": current_speaker,
@@ -911,14 +638,12 @@ def update_conversation_files(state, previous_state=None):
                             })
                             current_message = []
                         
-                        # Start a new assistant message
                         current_speaker = "ASSISTANT"
                         content = line[len('[ASSISTANT]:'):].strip()
-                        if content:  # Only add if there's content on this line
+                        if content:  
                             current_message.append(content)
                     
                     elif line.startswith('[SPEAKER '):
-                        # If we were building a previous message, save it
                         if current_speaker:
                             conversation_turns.append({
                                 "speaker": current_speaker,
@@ -926,39 +651,31 @@ def update_conversation_files(state, previous_state=None):
                             })
                             current_message = []
                         
-                        # Extract speaker number and start new message
                         import re
                         speaker_match = re.match(r'\[SPEAKER (\d+)\]:', line)
                         if speaker_match:
                             speaker_num = speaker_match.group(1)
                             current_speaker = f"SPEAKER {speaker_num}"
                             content = line[line.find(':')+1:].strip()
-                            if content:  # Only add if there's content on this line
+                            if content:  
                                 current_message.append(content)
                     
                     elif current_speaker:
-                        # Continue building the current message
                         current_message.append(line)
                 
-                # Don't forget to add the last message if there is one
                 if current_speaker and current_message:
                     conversation_turns.append({
                         "speaker": current_speaker,
                         "message": '\n'.join(current_message).strip()
                     })
             
-            # Write just the conversation turns to the JSON file
             with open(chat_history_path, 'w') as f:
                 json.dump(conversation_turns, f, indent=2)
             
-            print(f"Updated chat history file with {len(conversation_turns)} conversation turns")
             chat_history_updated = True
             
-            # Upload chat history to Supabase in a background thread if it was updated
             if chat_history_updated and CURRENT_FACE_ID and CURRENT_RUN_TIMESTAMP:
-                # Get a reference to the face_watcher instance if it exists
                 face_watcher_instance = None
-                # Try to get the face_watcher from the module scope
                 if 'face_watcher' in globals():
                     face_watcher_instance = globals()['face_watcher']
                 
@@ -1362,19 +1079,15 @@ def patch_run_method(assistant):
                 def run_node_wrapper(*args, **kwargs):
                     global last_state
                     
-                    # Call original method
                     result = original_run_node(*args, **kwargs)
                     
-                    # After node execution, check if state changed
                     if hasattr(assistant.workflow, 'state'):
                         current_state = assistant.workflow.state
                         
-                        # Only update if there's been a meaningful change
                         if current_state != last_state and 'conversation' in current_state:
                             prev_conv = last_state.get('conversation', '') if last_state else ''
                             current_conv = current_state.get('conversation', '')
                             
-                            # Check if the conversation content actually changed
                             if current_conv != prev_conv:
                                 node_name = args[0] if args else kwargs.get('node', 'unknown')
                                 print(f"Conversation state updated after node {node_name}")
@@ -1712,25 +1425,8 @@ if __name__ == "__main__":
         # Start the face directory watcher
         face_watcher = FaceDirectoryWatcher()
         face_watcher.start()
-        
-        # Handle test mode
-        if args.test:
-            success = test_workflow()
-            # Clean up temp files if not in debug mode
-            if not args.keep_temp:
-                cleanup_temp_files()
-            sys.exit(0 if success else 1)
-        
-        # Normal execution
-        if args.diarization:
-            print(f"Speaker diarization enabled (expected speakers: {args.speakers})")
-            print("You'll be asked to provide a 10-second voice sample for identification")
-        else:
-            print("Speaker diarization disabled")
             
         if args.screen:
-            print("Screen capture enabled for facial recognition")
-            print("Faces will be automatically detected and matched during conversation")
             print(f"Face will be rechecked every {args.face_recheck} seconds")
         
         # Initialize and run the assistant
@@ -1740,14 +1436,11 @@ if __name__ == "__main__":
             use_camera=args.screen
         )
         
-        # Monkey patch the run method to update conversation files
         patch_run_method(assistant)
         
-        # If facial recognition is enabled, set the recheck interval
         if args.screen and hasattr(assistant, 'facial_recognition') and assistant.facial_recognition:
             assistant.facial_recognition.set_recheck_interval(args.face_recheck)
             
-            # Detect and recognize face at startup
             face_id = detect_and_recognize_face(assistant)
             if face_id:
                 print(f"Face recognition completed successfully. Identified as: {face_id}")
@@ -1755,35 +1448,27 @@ if __name__ == "__main__":
         try:
             assistant.run()
         finally:
-            # Stop the face directory watcher
             if 'face_watcher' in locals():
                 face_watcher.stop()
             
-            # Final update of conversation files if we have a face ID
             if CURRENT_FACE_ID and hasattr(assistant, 'workflow') and assistant.workflow:
                 update_conversation_files(assistant.workflow.state)
             
-            # Clean up temp files unless explicitly told to keep them
             if not args.keep_temp:
                 cleanup_temp_files()
         
     except KeyboardInterrupt:
-        print("\nExiting program due to keyboard interrupt")
-        # Stop the face directory watcher
         if 'face_watcher' in locals():
             face_watcher.stop()
             
-        # Final update of conversation files before exit
         if 'assistant' in locals() and CURRENT_FACE_ID and hasattr(assistant, 'workflow') and assistant.workflow:
             update_conversation_files(assistant.workflow.state)
         
-        # Clean up temp files unless explicitly told to keep them
         if 'args' in locals() and not args.keep_temp:
             cleanup_temp_files()
     except Exception as e:
         print(f"Startup error: {e}")
         if 'args' in locals() and args.debug:
             traceback.print_exc()
-        # Clean up temp files unless explicitly told to keep them
         if 'args' in locals() and not args.keep_temp:
             cleanup_temp_files() 
