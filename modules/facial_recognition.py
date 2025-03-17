@@ -1093,9 +1093,6 @@ class FacialRecognitionModule:
         Calculate cosine similarity between two face embeddings
         """
         try:
-            if embedding1 is None or embedding2 is None:
-                print("Warning: Received None embedding in similarity calculation")
-                return 0
                 
             if np.isnan(embedding1).any() or np.isnan(embedding2).any():
                 print("Warning: NaN values in embeddings")
@@ -1139,7 +1136,7 @@ class FacialRecognitionModule:
             else:
                 output_text = user_id
                 
-            with open(output_file, 'w') as f:  # 'w' mode overwrites existing content
+            with open(output_file, 'w') as f:
                 f.write(output_text)
             
         except Exception as e:
