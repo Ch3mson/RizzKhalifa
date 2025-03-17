@@ -9,7 +9,6 @@ from langchain_groq import ChatGroq
 from modules.config import OPENAI_MODEL, GROQ_MODEL
 
 
-# Define the prompt template
 KNOWLEDGE_RESPONSE_PROMPT = ChatPromptTemplate.from_template(
     """Use the conversation snippet below and the knowledge base to form an informative, helpful reply.
 
