@@ -5,7 +5,6 @@ import 'package:rb_demo/pages/settings.dart';
 
 import '../pages/user-history.dart';
 
-// Route names
 class AppRoutes {
   static const String home = '/';
   static const String userHistory = '/userHistory';

@@ -3,8 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:intl/intl.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:rb_demo/components/bottom_nav_bar.dart';
 
-import '../components/bottom_nav_bar.dart';
+import '../services/format.dart';
 
 class UserHistory extends StatefulWidget {
   const UserHistory({Key? key}) : super(key: key);
@@ -19,7 +20,6 @@ class _UserHistoryState extends State<UserHistory> {
   bool isPlaying = false;
   String? currentlyPlaying;
   final AudioPlayer _audioPlayer = AudioPlayer();
-  static const bucketName = "agent-audio";
   int _currentIndex = 1;
   final Color primaryColor = Colors.blue;
   final Color secondaryColor = Colors.blue.shade700;
@@ -66,7 +66,6 @@ class _UserHistoryState extends State<UserHistory> {
     if (dateString == null) return 'Unknown date';
     try {
       final date = DateTime.parse(dateString);
-      // Subtract 4 hours to adjust for EST timezone
       final adjustedDate = date.subtract(const Duration(hours: 4));
       return DateFormat('MM/dd/yy • h:mm a').format(adjustedDate);
     } catch (e) {
@@ -75,7 +74,7 @@ class _UserHistoryState extends State<UserHistory> {
   }
 
   void navigateToPage(int index) {
-    if (index == _currentIndex) return; // Don't navigate if already on the page
+    if (index == _currentIndex) return;
 
     setState(() {
       _currentIndex = index;
@@ -187,9 +186,7 @@ class _UserHistoryState extends State<UserHistory> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.search, color: Colors.white),
-                    onPressed: () {
-                      // Implement search functionality
-                    },
+                    onPressed: () {},
                     tooltip: 'Search',
                   ),
                 ],
@@ -287,14 +284,12 @@ class _UserHistoryState extends State<UserHistory> {
         final userData = userHistoryData[index];
         final userId = userData['user_id']?.toString() ?? 'Unknown User';
 
-        // Handle personal_info which could be a Map or a List
         Map<String, dynamic> personalInfo = {};
         if (userData['personal_info'] is Map) {
           personalInfo =
               Map<String, dynamic>.from(userData['personal_info'] as Map);
         } else if (userData['personal_info'] is List &&
             (userData['personal_info'] as List).isNotEmpty) {
-          // If it's a list, try to use the first item if it's a map
           final firstItem = (userData['personal_info'] as List).first;
           if (firstItem is Map) {
             personalInfo = Map<String, dynamic>.from(firstItem);
@@ -303,8 +298,6 @@ class _UserHistoryState extends State<UserHistory> {
 
         final profilePic = "https://ehysqseqcnewyndigvfo.supabase"
             ".co/storage/v1/object/public/avatars/${userData['profile_pic']}";
-
-        // Extract personal info details if available
         final name = personalInfo['name'] as String? ?? 'User $userId';
         final email = personalInfo['email'] as String? ?? '';
         final additionalInfo = personalInfo['additional_info'] as String? ?? '';
@@ -323,7 +316,6 @@ class _UserHistoryState extends State<UserHistory> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header with gradient
                 Container(
                   height: 80,
                   decoration: BoxDecoration(
@@ -341,7 +333,6 @@ class _UserHistoryState extends State<UserHistory> {
                     padding: const EdgeInsets.all(16),
                     child: Row(
                       children: [
-                        // Profile picture with border
                         Container(
                           width: 50,
                           height: 50,
@@ -427,7 +418,6 @@ class _UserHistoryState extends State<UserHistory> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // User ID and created date - Make this scrollable
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
@@ -438,10 +428,7 @@ class _UserHistoryState extends State<UserHistory> {
                           ],
                         ),
                       ),
-
                       const SizedBox(height: 16),
-
-                      // Additional info if available
                       if (additionalInfo.isNotEmpty) ...[
                         const Text(
                           'Additional Information',
@@ -462,8 +449,6 @@ class _UserHistoryState extends State<UserHistory> {
                         ),
                         const SizedBox(height: 16),
                       ],
-
-                      // Action button - Only keep View Profile
                       Center(
                         child: ElevatedButton.icon(
                           icon: const Icon(Icons.visibility, size: 16),
@@ -516,66 +501,6 @@ class _UserHistoryState extends State<UserHistory> {
     );
   }
 
-  Widget _buildPersonalInfoDetails(Map<String, dynamic> personalInfo) {
-    // Filter out already displayed fields
-    final displayedKeys = ['name', 'email', 'additional_info'];
-    final otherFields = personalInfo.entries
-        .where((entry) =>
-            !displayedKeys.contains(entry.key) && entry.value != null)
-        .toList();
-
-    if (otherFields.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Divider(),
-        const SizedBox(height: 8),
-        const Text(
-          'User Details',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        ...otherFields.map((entry) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${_capitalizeFirst(entry.key.replaceAll('_', ' '))}: ',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    entry.value.toString(),
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }).toList(),
-      ],
-    );
-  }
-
-  String _capitalizeFirst(String text) {
-    if (text.isEmpty) return text;
-    return text[0].toUpperCase() + text.substring(1);
-  }
-
   Widget _buildOptionsSheet(Map<String, dynamic> userData) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 20),
@@ -603,7 +528,6 @@ class _UserHistoryState extends State<UserHistory> {
             leading: Icon(Icons.edit, color: primaryColor),
             title: const Text('Edit User Info'),
             onTap: () {
-              // Implement edit functionality
               Navigator.pop(context);
             },
           ),
@@ -613,9 +537,7 @@ class _UserHistoryState extends State<UserHistory> {
             title: const Text('Delete Record',
                 style: TextStyle(color: Colors.red)),
             onTap: () {
-              // Implement delete functionality
               Navigator.pop(context);
-              // Show confirmation dialog
               showDialog(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -702,20 +624,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    // Handle personal_info which could be a Map or a List
     Map<String, dynamic> personalInfo = {};
     List<Map<String, dynamic>> structuredData = [];
-
-    // Process personal_info based on its type
     if (widget.userData['personal_info'] is Map) {
       personalInfo =
           Map<String, dynamic>.from(widget.userData['personal_info'] as Map);
     } else if (widget.userData['personal_info'] is List) {
-      // If it's a list, use it directly as structured data
       structuredData = List<Map<String, dynamic>>.from(
           widget.userData['personal_info'] as List);
-
-      // Also extract basic info for the header if available
       if (structuredData.isNotEmpty) {
         for (var item in structuredData) {
           if (item['type'] == 'name') {
@@ -732,20 +648,18 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final email = personalInfo['email'] as String? ?? '';
     final profilePic =
         "https://ehysqseqcnewyndigvfo.supabase.co/storage/v1/object/public/avatars/${widget.userData['profile_pic']}";
-    final timestamp = _formatDate(widget.userData['created_at']?.toString());
+    final timestamp = formatDate(widget.userData['created_at']?.toString());
 
     return Scaffold(
       appBar: AppBar(
         title: Text(name),
-        elevation: 0, // Remove shadow for a more modern look
+        elevation: 0,
         backgroundColor: primaryColor,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),
-            onPressed: () {
-              // Implement edit functionality
-            },
+            onPressed: () {},
             tooltip: 'Edit Profile',
           ),
         ],
@@ -777,7 +691,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
               ),
               child: Column(
                 children: [
-                  // Profile picture with border
                   Container(
                     width: 120,
                     height: 120,
@@ -846,12 +759,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
             const SizedBox(height: 16),
 
-            // Section tabs
             _buildSectionHeader(),
 
             const SizedBox(height: 16),
 
-            // Content based on selected tab
             _selectedTabIndex == 0
                 ? _buildChatHistorySection()
                 : _buildUserInfoSection(structuredData),
@@ -938,8 +849,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
               ),
             ],
           ),
-
-          // Display structured data items
           ...structuredData
               .where((item) =>
                   item['type'] != null &&
@@ -1125,7 +1034,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
       itemCount: chatHistory.length,
       itemBuilder: (context, index) {
         final chat = chatHistory[index];
-        final timestamp = _formatDate(chat['created_at']?.toString());
+        final timestamp = formatDate(chat['created_at']?.toString());
         final message = chat['message'] as String? ?? 'No message content';
 
         return Card(
@@ -1194,9 +1103,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     OutlinedButton.icon(
                       icon: const Icon(Icons.visibility, size: 16),
                       label: const Text('View Full Conversation'),
-                      onPressed: () {
-                        // Navigate to full conversation view
-                      },
+                      onPressed: () {},
                       style: OutlinedButton.styleFrom(
                         foregroundColor: primaryColor,
                         side: BorderSide(color: primaryColor),
@@ -1219,7 +1126,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final type = item['type'] as String;
     final value = item['value'] as String;
 
-    // Fix the confidence type casting issue
     final dynamic confidenceValue = item['confidence'];
     final double confidence = confidenceValue is int
         ? confidenceValue.toDouble()
@@ -1245,13 +1151,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 Row(
                   children: [
                     Icon(
-                      _getIconForType(type),
+                      getIconForType(type),
                       size: 18,
                       color: primaryColor,
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      _capitalizeFirst(type.replaceAll('_', ' ')),
+                      capitalizeFirst(type.replaceAll('_', ' ')),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -1263,11 +1169,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _getConfidenceColor(confidence),
+                    color: getConfidenceColor(confidence),
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: _getConfidenceColor(confidence).withOpacity(0.4),
+                        color: getConfidenceColor(confidence).withOpacity(0.4),
                         blurRadius: 4,
                         offset: const Offset(0, 2),
                       ),
@@ -1278,7 +1184,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: _getConfidenceTextColor(confidence),
+                      color: getConfidenceTextColor(confidence),
                     ),
                   ),
                 ),
@@ -1305,7 +1211,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    'Added: ${_formatTimestamp(timestamp)}',
+                    'Added: ${formatTimestamp(timestamp)}',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey.shade600,
@@ -1319,73 +1225,5 @@ class _UserProfilePageState extends State<UserProfilePage> {
         ),
       ),
     );
-  }
-
-  IconData _getIconForType(String type) {
-    switch (type.toLowerCase()) {
-      case 'phone':
-      case 'phone_number':
-        return Icons.phone;
-      case 'email':
-        return Icons.email;
-      case 'address':
-        return Icons.home;
-      case 'birthday':
-      case 'birth_date':
-        return Icons.cake;
-      case 'occupation':
-      case 'job':
-        return Icons.work;
-      case 'education':
-        return Icons.school;
-      case 'hobby':
-      case 'interest':
-        return Icons.interests;
-      case 'family':
-        return Icons.family_restroom;
-      case 'location':
-        return Icons.location_on;
-      default:
-        return Icons.info_outline;
-    }
-  }
-
-  Color _getConfidenceColor(double confidence) {
-    if (confidence >= 0.9) return Colors.green.shade100;
-    if (confidence >= 0.7) return Colors.lightGreen.shade100;
-    if (confidence >= 0.5) return Colors.amber.shade100;
-    return Colors.orange.shade100;
-  }
-
-  Color _getConfidenceTextColor(double confidence) {
-    if (confidence >= 0.9) return Colors.green.shade800;
-    if (confidence >= 0.7) return Colors.lightGreen.shade600;
-    if (confidence >= 0.5) return Colors.amber.shade800;
-    return Colors.orange.shade800;
-  }
-
-  String _formatTimestamp(String timestamp) {
-    try {
-      final date = DateTime.parse(timestamp);
-      return DateFormat('MM/dd/yy • h:mm a').format(date);
-    } catch (e) {
-      return timestamp;
-    }
-  }
-
-  String _formatDate(String? dateString) {
-    if (dateString == null) return 'Unknown date';
-    try {
-      final date = DateTime.parse(dateString);
-      final adjustedDate = date.subtract(const Duration(hours: 4));
-      return DateFormat('MM/dd/yy • h:mm a').format(adjustedDate);
-    } catch (e) {
-      return 'Invalid date';
-    }
-  }
-
-  String _capitalizeFirst(String text) {
-    if (text.isEmpty) return text;
-    return text[0].toUpperCase() + text.substring(1);
   }
 }

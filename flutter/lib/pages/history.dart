@@ -1,25 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:intl/intl.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:rb_demo/components/bottom_nav_bar.dart';
+import 'package:rb_demo/services/format.dart';
 
 class HistoryPage extends StatefulWidget {
-  const HistoryPage({Key? key}) : super(key: key);
+  const HistoryPage({super.key});
 
   @override
-  _HistoryPageState createState() => _HistoryPageState();
+  HistoryPageState createState() => HistoryPageState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class HistoryPageState extends State<HistoryPage> {
   List<Map<String, dynamic>> audioFiles = [];
   bool isLoading = true;
   bool isPlaying = false;
   String? currentlyPlaying;
   final AudioPlayer _audioPlayer = AudioPlayer();
   static const bucketName = "agent-audio";
-  int _currentIndex = 2; // Set to 1 since this is the History page
+  int _currentIndex = 2;
 
   @override
   void initState() {
@@ -87,20 +87,8 @@ class _HistoryPageState extends State<HistoryPage> {
     super.dispose();
   }
 
-  String _formatDate(String? dateString) {
-    if (dateString == null) return 'Unknown date';
-    try {
-      final date = DateTime.parse(dateString);
-      // Subtract 4 hours to adjust for EST timezone
-      final adjustedDate = date.subtract(const Duration(hours: 4));
-      return DateFormat('MMM d, yyyy • h:mm a').format(adjustedDate);
-    } catch (e) {
-      return 'Invalid date';
-    }
-  }
-
   void navigateToPage(int index) {
-    if (index == _currentIndex) return; // Don't navigate if already on the page
+    if (index == _currentIndex) return;
 
     setState(() {
       _currentIndex = index;
@@ -147,7 +135,7 @@ class _HistoryPageState extends State<HistoryPage> {
           onItemTapped: navigateToPage,
           items: const [
             BottomNavItem.fontAwesome(
-                faIconData: FontAwesomeIcons.home, label: 'Home'),
+                faIconData: FontAwesomeIcons.house, label: 'Home'),
             BottomNavItem.fontAwesome(
                 faIconData: FontAwesomeIcons.userGroup, label: 'User-Info'),
             BottomNavItem.fontAwesome(
@@ -258,7 +246,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   children: [
                     const SizedBox(height: 4),
                     Text(
-                      _formatDate(file['created_at']),
+                      formatDate(file['created_at']),
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
@@ -283,7 +271,6 @@ class _HistoryPageState extends State<HistoryPage> {
                 trailing: IconButton(
                   icon: const Icon(Icons.more_vert),
                   onPressed: () {
-                    // Show options menu (download, share, delete, etc.)
                     showModalBottomSheet(
                       context: context,
                       builder: (context) => _buildOptionsSheet(file),
@@ -291,7 +278,6 @@ class _HistoryPageState extends State<HistoryPage> {
                   },
                 ),
               ),
-              // Display detailed sentiment data if available
               if (sentimentData != null)
                 Padding(
                   padding:
@@ -313,7 +299,6 @@ class _HistoryPageState extends State<HistoryPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Add sentiment header if sentiment data exists
           if (sentimentData != null) ...[
             Padding(
               padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
@@ -325,7 +310,6 @@ class _HistoryPageState extends State<HistoryPage> {
             leading: const Icon(Icons.download),
             title: const Text('Download'),
             onTap: () {
-              // Implement download functionality
               Navigator.pop(context);
             },
           ),
@@ -333,7 +317,6 @@ class _HistoryPageState extends State<HistoryPage> {
             leading: const Icon(Icons.share),
             title: const Text('Share'),
             onTap: () {
-              // Implement share functionality
               Navigator.pop(context);
             },
           ),
@@ -341,9 +324,7 @@ class _HistoryPageState extends State<HistoryPage> {
             leading: const Icon(Icons.delete, color: Colors.red),
             title: const Text('Delete', style: TextStyle(color: Colors.red)),
             onTap: () {
-              // Implement delete functionality
               Navigator.pop(context);
-              // Show confirmation dialog
             },
           ),
         ],
@@ -351,14 +332,12 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  // New method to build sentiment header for the popup
   Widget _buildSentimentHeader(Map<String, dynamic> sentimentData) {
     final emotion = sentimentData['emotion']?.toString() ?? 'unknown';
     final sentiment = sentimentData['sentiment']?.toString() ?? 'neutral';
     final confidence = sentimentData['confidence'] ?? 0.0;
     final scores = sentimentData['scores'] as Map<String, dynamic>?;
 
-    // Choose color based on sentiment
     Color sentimentColor;
     switch (sentiment.toLowerCase()) {
       case 'positive':
@@ -414,8 +393,6 @@ class _HistoryPageState extends State<HistoryPage> {
             fontWeight: FontWeight.w500,
           ),
         ),
-
-        // Add score bars if scores exist
         if (scores != null) ...[
           const SizedBox(height: 16),
           const Text(
@@ -465,7 +442,6 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget _buildSentimentAggregateView() {
     if (audioFiles.isEmpty) return const SizedBox.shrink();
 
-    // Calculate aggregate sentiment data
     int totalFiles = 0;
     int positiveCount = 0;
     int negativeCount = 0;
@@ -491,19 +467,15 @@ class _HistoryPageState extends State<HistoryPage> {
             break;
         }
 
-        // Count emotions
         final emotion = sentiment['emotion']?.toString() ?? 'unknown';
         emotionCounts[emotion] = (emotionCounts[emotion] ?? 0) + 1;
 
-        // Sum confidence for average
         avgConfidence += sentiment['confidence']?.toDouble() ?? 0;
       }
     }
 
-    // Calculate average confidence
     avgConfidence = totalFiles > 0 ? avgConfidence / totalFiles : 0;
 
-    // Find most common emotion
     String mostCommonEmotion = 'none';
     int maxCount = 0;
     emotionCounts.forEach((emotion, count) {
@@ -594,8 +566,6 @@ class _HistoryPageState extends State<HistoryPage> {
                 color: Colors.grey.shade700,
               ),
             ),
-
-            // Add a section for individual audio entries summary
             if (totalFiles > 0) ...[
               const SizedBox(height: 16),
               const Divider(),
@@ -673,13 +643,11 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
-  // Widget to display a summary of sentiment data
   Widget _buildSentimentSummary(Map<String, dynamic> sentimentData) {
     final emotion = sentimentData['emotion']?.toString() ?? 'unknown';
     final sentiment = sentimentData['sentiment']?.toString() ?? 'neutral';
     final confidence = sentimentData['confidence'] ?? 0.0;
 
-    // Choose color based on sentiment
     Color sentimentColor;
     switch (sentiment.toString().toLowerCase()) {
       case 'positive':
@@ -714,13 +682,11 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  // Add this helper method to replace the extension
   String _capitalizeFirst(String text) {
     if (text.isEmpty) return text;
     return text[0].toUpperCase() + text.substring(1);
   }
 
-  // Widget to display detailed sentiment scores
   Widget _buildSentimentDetails(Map<String, dynamic> sentimentData) {
     final scores = sentimentData['scores'] as Map<String, dynamic>?;
     if (scores == null) return const SizedBox.shrink();
@@ -771,7 +737,6 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  // Helper widget to display a score bar
   Widget _buildScoreBar(String label, double value, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -792,9 +757,7 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  // Add a new method to show recent entries summary
   Widget _buildRecentEntriesSummary() {
-    // Show at most 3 recent entries
     final entriesToShow = audioFiles.length > 3 ? 3 : audioFiles.length;
 
     return Column(
@@ -811,7 +774,6 @@ class _HistoryPageState extends State<HistoryPage> {
         final sentiment = sentimentData['sentiment']?.toString() ?? 'neutral';
         final confidence = sentimentData['confidence'] ?? 0.0;
 
-        // Choose color based on sentiment
         Color sentimentColor;
         switch (sentiment.toLowerCase()) {
           case 'positive':
@@ -860,7 +822,7 @@ class _HistoryPageState extends State<HistoryPage> {
                 ),
               ),
               Text(
-                _formatDate(file['created_at']).split('•')[0].trim(),
+                formatDate(file['created_at']).split('•')[0].trim(),
                 style: TextStyle(
                   fontSize: 12,
                   color: Colors.grey.shade500,

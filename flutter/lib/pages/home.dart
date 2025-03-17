@@ -76,10 +76,8 @@ class _HomePageState extends State<HomePage> {
     } else {
       print('Starting stream');
 
-      // Set flag to prevent immediate stopping
       _canStopStreaming = false;
 
-      // Start a timer to enforce minimum streaming time
       _streamingTimer?.cancel();
       _streamingTimer = Timer(const Duration(seconds: 10), () {
         _canStopStreaming = true;
@@ -100,7 +98,6 @@ class _HomePageState extends State<HomePage> {
 
       cursorApi.startTranscription();
 
-      // Add success toast when starting stream
       NotificationUtil.showNotification(
         context: context,
         title: 'Stream started successfully',
@@ -145,7 +142,6 @@ class _HomePageState extends State<HomePage> {
         });
         return;
       }
-      // If playing a different file or resuming
       if (currentlyPlaying != fileName) {
         final signedUrl = await Supabase.instance.client.storage
             .from(bucketName)
@@ -163,7 +159,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Optional: Add a method to play from URL directly if needed
   Future<void> playMp3FromUrl(String fileUrl) async {
     try {
       await _audioPlayer.setUrl(fileUrl);
@@ -185,9 +180,8 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  // Method to handle page navigation
   void navigateToPage(int index) {
-    if (index == _currentIndex) return; // Don't navigate if already on the page
+    if (index == _currentIndex) return;
 
     setState(() {
       _currentIndex = index;
@@ -221,7 +215,6 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Minimal status text
             Text(
               isStreaming ? 'STREAMING' : 'STREAM',
               style: TextStyle(
@@ -232,10 +225,7 @@ class _HomePageState extends State<HomePage> {
                     isStreaming ? Colors.green.shade700 : Colors.grey.shade700,
               ),
             ),
-
             const SizedBox(height: 30),
-
-            // Cool animated button
             GestureDetector(
               onTap: subscribeToRealTimeUpdates,
               child: AnimatedContainer(
@@ -273,7 +263,6 @@ class _HomePageState extends State<HomePage> {
                             key: const ValueKey('streaming'),
                             alignment: Alignment.center,
                             children: [
-                              // Pulsing circles for streaming effect
                               ...List.generate(3, (index) {
                                 return AnimatedBuilder(
                                   animation: AlwaysStoppedAnimation(index / 3),
@@ -310,8 +299,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ),
-
-            // Now Playing indicator (only when streaming and playing)
             if (isStreaming && isPlaying)
               Padding(
                 padding: const EdgeInsets.only(top: 30),
