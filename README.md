@@ -1,4 +1,4 @@
-# Meta Rizz
+# RizzKhalifa
 
 A conversational AI assistant designed to help you sound smooth and charismatic in dating conversations. The assistant listens to your conversations, analyzes the context, and provides witty, thoughtful responses that make you sound impressive.
 
