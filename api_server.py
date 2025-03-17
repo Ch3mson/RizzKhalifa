@@ -16,10 +16,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import psutil
 
-# Add the current directory to the path so we can import from modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Import from cursor_main.py to access the CursorAssistant class
 from cursor_main import CursorAssistant, parse_arguments
 
 app = FastAPI(
@@ -28,13 +26,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Global variables to track the assistant process
 assistant_process = None
 assistant_thread = None
 assistant_instance = None
 is_running = False
 process_output = []
-max_output_lines = 1000  # Maximum number of output lines to store
+max_output_lines = 1000 
 
 
 class AssistantConfig(BaseModel):
@@ -60,38 +57,31 @@ def run_assistant_in_thread(config: AssistantConfig):
     global assistant_instance, is_running, process_output
     
     try:
-        # Clear previous output
         process_output = []
         
-        # Create a custom stdout handler to capture output
         class OutputCapture:
             def write(self, text):
                 global process_output
-                if text.strip():  # Only add non-empty lines
+                if text.strip(): 
                     process_output.append(text)
                     if len(process_output) > max_output_lines:
                         process_output = process_output[-max_output_lines:]
-                # Also write to the actual stdout
                 sys.__stdout__.write(text)
                 sys.__stdout__.flush()
             
             def flush(self):
                 sys.__stdout__.flush()
         
-        # Redirect stdout to our capture handler
         sys.stdout = OutputCapture()
         
-        # Initialize the assistant with the provided configuration
         assistant_instance = CursorAssistant(
             use_diarization=config.diarization,
             expected_speakers=config.speakers,
             use_camera=config.screen
         )
         
-        # Set the running flag
         is_running = True
         
-        # Run the assistant
         assistant_instance.run()
         
     except Exception as e:
@@ -101,7 +91,6 @@ def run_assistant_in_thread(config: AssistantConfig):
         print(error_msg)
     finally:
         is_running = False
-        # Restore stdout
         sys.stdout = sys.__stdout__
 
 
@@ -109,7 +98,6 @@ def run_assistant_subprocess(config: AssistantConfig):
     """Run the assistant as a separate subprocess"""
     global assistant_process, is_running, process_output
     
-    # Build command with arguments based on config
     cmd = [sys.executable, "cursor_main.py"]
     
     if not config.diarization:
@@ -125,29 +113,25 @@ def run_assistant_subprocess(config: AssistantConfig):
         cmd.append("--debug")
     
     try:
-        # Clear previous output
         process_output = []
         
-        # Start the process
         assistant_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1,  # Line buffered
+            bufsize=1, 
             universal_newlines=True
         )
         
         is_running = True
         
-        # Read output in a loop
         for line in assistant_process.stdout:
             process_output.append(line.strip())
             if len(process_output) > max_output_lines:
                 process_output = process_output[-max_output_lines:]
-            print(line, end="")  # Also print to console
+            print(line, end="") 
         
-        # Process has ended
         assistant_process.wait()
         return_code = assistant_process.returncode
         
@@ -193,11 +177,9 @@ async def start_assistant(config: AssistantConfig, background_tasks: BackgroundT
         )
     
     try:
-        # Choose whether to use thread or subprocess approach
-        use_thread = True  # Set to False to use subprocess instead
+        use_thread = True 
         
         if use_thread:
-            # Start in a background thread
             assistant_thread = threading.Thread(
                 target=run_assistant_in_thread,
                 args=(config,),
@@ -205,7 +187,6 @@ async def start_assistant(config: AssistantConfig, background_tasks: BackgroundT
             )
             assistant_thread.start()
         else:
-            # Start as a subprocess
             background_tasks.add_task(run_assistant_subprocess, config)
         
         return {
@@ -235,26 +216,19 @@ async def stop_assistant():
         )
     
     try:
-        # If running as a thread with an instance
         if assistant_instance is not None:
-            # Set the running flag to False to stop the main loop
             assistant_instance.is_running = False
-            # Also try to stop recording if possible
             if hasattr(assistant_instance.recorder, 'stop_recording'):
                 assistant_instance.recorder.stop_recording()
         
-        # If running as a subprocess
         if assistant_process is not None:
-            # Try to terminate gracefully first
             assistant_process.terminate()
             
-            # Wait a bit for it to terminate
             for _ in range(5):
                 if assistant_process.poll() is not None:
                     break
                 time.sleep(0.5)
             
-            # If still running, force kill
             if assistant_process.poll() is None:
                 assistant_process.kill()
         
@@ -279,13 +253,11 @@ async def get_status():
     status = AssistantStatus(running=is_running)
     
     if is_running:
-        # If running as a subprocess
         if assistant_process is not None:
             pid = assistant_process.pid
             status.pid = pid
             
             try:
-                # Get process info
                 process = psutil.Process(pid)
                 status.uptime = time.time() - process.create_time()
                 status.start_time = time.strftime(
@@ -297,10 +269,8 @@ async def get_status():
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         
-        # If running as a thread
         elif assistant_thread is not None and assistant_thread.is_alive():
-            status.pid = os.getpid()  # Main process PID
-            # We don't have detailed stats for thread mode
+            status.pid = os.getpid() 
     
     return status
 
@@ -330,15 +300,12 @@ def start_ngrok():
     try:
         from pyngrok import ngrok
         
-        # Get the ngrok auth token from environment variable
         ngrok_auth_token = os.environ.get("NGROK_AUTH_TOKEN")
         if ngrok_auth_token:
             ngrok.set_auth_token(ngrok_auth_token)
         
-        # Open a ngrok tunnel to the API server
-        public_url = ngrok.connect(8000).public_url  # Changed to 8000 to match server port
+        public_url = ngrok.connect(8000).public_url
         print(f"ngrok tunnel opened at: {public_url}")
-        print(f"Open this URL to access the API from anywhere")
         
     except ImportError:
         print("ngrok not installed. Run 'pip install pyngrok' to enable tunneling.")
@@ -347,8 +314,6 @@ def start_ngrok():
 
 
 if __name__ == "__main__":
-    # Start ngrok in a separate thread
     threading.Thread(target=start_ngrok, daemon=True).start()
     
-    # Start the FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=8000)
